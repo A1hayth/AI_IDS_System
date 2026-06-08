@@ -102,6 +102,9 @@ class PacketInfo:
     src_port: Optional[int] = None
     dst_port: Optional[int] = None
     protocol: Optional[str] = None
+    protocol_number: Optional[int] = None
+    """协议号（TCP=6, UDP=17, ICMP=1），对接特征提取模块。"""
+
     packet_length: Optional[int] = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -219,6 +222,7 @@ def parse_packet(packet: Any) -> Optional[PacketInfo]:
         src_port: Optional[int] = None
         dst_port: Optional[int] = None
         protocol: Optional[str] = None
+        protocol_number: Optional[int] = None
         packet_length: Optional[int] = None
 
         # 时间戳：优先用 Scapy 自带 time，其次用当前 UTC 时间
@@ -233,9 +237,11 @@ def parse_packet(packet: Any) -> Optional[PacketInfo]:
 
         # IP 层解析
         if packet.haslayer("IP"):
-            src_ip = getattr(packet["IP"], "src", None)
-            dst_ip = getattr(packet["IP"], "dst", None)
-            protocol = _resolve_protocol(packet["IP"])
+            ip_layer = packet["IP"]
+            src_ip = getattr(ip_layer, "src", None)
+            dst_ip = getattr(ip_layer, "dst", None)
+            protocol = _resolve_protocol(ip_layer)
+            protocol_number = _safe_int(getattr(ip_layer, "proto", None))
 
             # TCP 层
             if packet.haslayer("TCP"):
@@ -254,6 +260,7 @@ def parse_packet(packet: Any) -> Optional[PacketInfo]:
         # ICMP 层（ICMP 不承载在 IP 上时也能抓到）
         elif packet.haslayer("ICMP"):
             protocol = "ICMP"
+            protocol_number = 1  # ICMP 的 IP 协议号
 
         else:
             # 非 IP 且非 ICMP（如 ARP、IPv6 等），当前版本不处理
@@ -266,6 +273,7 @@ def parse_packet(packet: Any) -> Optional[PacketInfo]:
             src_port=src_port,
             dst_port=dst_port,
             protocol=protocol,
+            protocol_number=protocol_number,
             packet_length=packet_length,
         )
 
@@ -431,7 +439,7 @@ def export_csv(path: Optional[str] = None, flush_cache: bool = False) -> str:
             writer = csv.DictWriter(
                 fh,
                 fieldnames=["timestamp", "src_ip", "dst_ip", "src_port",
-                            "dst_port", "protocol", "packet_length"],
+                            "dst_port", "protocol", "protocol_number", "packet_length"],
             )
             writer.writeheader()
             for pkt in packets:
@@ -604,9 +612,10 @@ if __name__ == "__main__":
     if recent:
         print(f"\n前 {len(recent)} 条数据预览:")
         print("-" * 80)
-        print(f"{'时间':<26} {'源IP':<16} {'目的IP':<16} {'源端口':<8} {'目的端口':<8} {'协议':<6} {'长度'}")
-        print("-" * 80)
+        print(f"{'时间':<26} {'源IP':<16} {'目的IP':<16} {'源端口':<8} {'目的端口':<8} {'协议':<6} {'协议号':<6} {'长度'}")
+        print("-" * 88)
         for pkt in recent:
+            proto_num = str(pkt.protocol_number) if pkt.protocol_number is not None else '-'
             print(
                 f"{pkt.timestamp or 'N/A':<26} "
                 f"{pkt.src_ip or 'N/A':<16} "
@@ -614,6 +623,7 @@ if __name__ == "__main__":
                 f"{str(pkt.src_port) if pkt.src_port else '-':<8} "
                 f"{str(pkt.dst_port) if pkt.dst_port else '-':<8} "
                 f"{pkt.protocol or 'N/A':<6} "
+                f"{proto_num:<6} "
                 f"{pkt.packet_length if pkt.packet_length else '-'}"
             )
     else:

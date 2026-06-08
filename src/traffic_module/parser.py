@@ -87,6 +87,7 @@ class ParsedPacket:
     src_port: Optional[int] = None
     dst_port: Optional[int] = None
     protocol: Optional[str] = None       # TCP | UDP | ICMP | HTTP | HTTPS | UNKNOWN
+    protocol_number: Optional[int] = None  # 协议号（TCP=6, UDP=17, ICMP=1）
     packet_length: Optional[int] = None
     tcp_flags: Optional[str] = None      # "SYN" | "SYN,ACK" | "FIN,ACK" | ...
 
@@ -351,7 +352,7 @@ class PacketParser:
     # ---- IP 层 ----------------------------------------------------------
 
     def _parse_ip(self, packet: Any, result: ParsedPacket) -> None:
-        """提取 IP 层字段。"""
+        """提取 IP 层字段（含协议号）。"""
         if not packet.haslayer("IP"):
             return
         try:
@@ -359,6 +360,7 @@ class PacketParser:
             result.src_ip = getattr(ip, "src", None)
             result.dst_ip = getattr(ip, "dst", None)
             result.ttl = _safe_int(getattr(ip, "ttl", None))
+            result.protocol_number = _safe_int(getattr(ip, "proto", None))
         except Exception:
             _logger.debug("IP 层解析失败", exc_info=True)
 
@@ -530,12 +532,16 @@ class PacketParser:
 # ---------------------------------------------------------------------------
 
 def extract_features(parsed: ParsedPacket) -> Dict[str, Any]:
-    """从 ParsedPacket 提取 feature_extractor.py 所需的特征字段。
+    """从 ParsedPacket 提取 feature_extractor.py 所需的单包特征字段。
 
-    对应 ``config.FEATURE_COLUMNS``:
-        src_port, dst_port, protocol, pkt_len, duration
+    对应 ``config.SELECTED_FEATURES``:
+        Destination Port, Protocol, Flow Duration,
+        Total Fwd Packets, Total Backward Packets,
+        Fwd Packet Length Max, Bwd Packet Length Max
 
-    注: duration 需由 feature_extractor 在时间窗口内自行计算。
+    注: 流级特征（Duration / Fwd/Bwd Packets / Max Lengths）需由
+    feature_extractor 在时间窗口内按 (src_ip, dst_ip, src_port, dst_port, protocol)
+    分组聚合计算。
     """
     return {
         "src_ip": parsed.src_ip,
@@ -543,9 +549,11 @@ def extract_features(parsed: ParsedPacket) -> Dict[str, Any]:
         "src_port": parsed.src_port,
         "dst_port": parsed.dst_port,
         "protocol": parsed.protocol,
+        "protocol_number": parsed.protocol_number,
         "packet_length": parsed.packet_length,
         "ttl": parsed.ttl,
         "tcp_flags": parsed.tcp_flags,
+        "timestamp": parsed.timestamp,
     }
 
 

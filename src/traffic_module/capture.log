@@ -155,3 +155,7 @@ Traceback (most recent call last):
     timestamp = datetime.fromtimestamp(pkt_time, tz=timezone.utc).isoformat()
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 TypeError: 'Mock' object cannot be interpreted as an integer
+2026-06-08 20:35:47 | INFO     | capture | 导出 CSV | 路径=C:\Users\Alhayth\AppData\Local\Temp\tmpwoqesog8.csv | 数据量=1 条
+2026-06-08 20:35:47 | INFO     | capture | CSV 导出完成 → C:\Users\Alhayth\AppData\Local\Temp\tmpwoqesog8.csv
+2026-06-08 20:37:37 | INFO     | capture | 导出 CSV | 路径=C:\Users\Alhayth\AppData\Local\Temp\test_proto.csv | 数据量=1 条
+2026-06-08 20:37:37 | INFO     | capture | CSV 导出完成 → C:\Users\Alhayth\AppData\Local\Temp\test_proto.csv
