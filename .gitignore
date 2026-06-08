@@ -11,3 +11,17 @@ data/processed/*
 models/*.pkl
 __pycache__/
 *.zip
+
+# 编译后的字节码
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境（绝对不能上传）
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
