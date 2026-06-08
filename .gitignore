@@ -1,5 +1,13 @@
+# 忽略所有数据文件
 archive/
+data/raw/*
+data/processed/*
+
+# 但不要忽略 .gitkeep 文件
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# 忽略模型和缓存
 models/*.pkl
 __pycache__/
-.venv/
 *.zip
