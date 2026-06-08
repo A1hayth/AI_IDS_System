@@ -1,65 +1,39 @@
 import joblib
 import os
-import sys
 import numpy as np
-
-# 导入配置
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from config import (
-    XGB_MODEL_FILE, SCALER_FILE, LABEL_ENCODER_FILE, 
-    PROTOCOL_ENCODER_FILE, MODELS_DIR
-)
+import pandas as pd
 
 class Detector:
-    def __init__(self, model_dir=None):
-        """
-        初始化检测器，加载模型和预处理工具
-        :param model_dir: 模型目录，不提供时使用配置文件中的路径
-        """
-        # 使用配置的目录
-        if model_dir is None:
-            model_dir = MODELS_DIR
-
+    def __init__(self):
+        # 获取模型路径（建议使用绝对路径防止报错）
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(base_path, "../../models/")
+        
         try:
-            self.model = joblib.load(XGB_MODEL_FILE)
-            self.scaler = joblib.load(SCALER_FILE)
-            self.label_encoder = joblib.load(LABEL_ENCODER_FILE)
-            self.protocol_encoder = joblib.load(PROTOCOL_ENCODER_FILE)
-            print("✅ AI 推理模型加载成功！")
-            print(f"   - XGBoost模型: {XGB_MODEL_FILE}")
-            print(f"   - 特征标准化器: {SCALER_FILE}")
-            print(f"   - 标签编码器: {LABEL_ENCODER_FILE}")
-            print(f"   - 协议编码器: {PROTOCOL_ENCODER_FILE}")
+            self.model = joblib.load(os.path.join(model_dir, "xgb_model.pkl"))
+            self.scaler = joblib.load(os.path.join(model_dir, "scaler.pkl"))
+            self.encoder = joblib.load(os.path.join(model_dir, "label_encoder.pkl"))
+            # 定义你在训练时选用的那几个核心特征列名（必须顺序一致）
+            self.feature_names = [
+                'Destination Port', 'Protocol', 'Flow Duration', 
+                'Total Fwd Packets', 'Total Backward Packets',
+                'Fwd Packet Length Max', 'Bwd Packet Length Max'
+            ]
+            print("✅ AI 推理引擎已加载最新模型")
         except Exception as e:
-            print(f"❌ 模型加载失败，请检查 models 文件夹。错误: {e}")
-            raise
+            print(f"❌ 加载失败: {e}")
 
-    def predict(self, feature_list):
+    def predict(self, feature_values):
         """
-        供其他模块调用
-        :param feature_list: 成员1提取的特征列表，如 [80, 6, 1024, ...]
-        :return: 预测的攻击类型字符串 (如 'Normal', 'DDoS', 'SQL Injection')
+        feature_values: 成员1传过来的列表，例如 [80, 6, 5000, 2, 1, 100, 50]
         """
-        try:
-            # 1. 转换为 numpy 数组并重塑为 2D 结构
-            features = np.array(feature_list).reshape(1, -1)
-            
-            # 2. 特征标准化
-            features_scaled = self.scaler.transform(features)
-            
-            # 3. 模型预测
-            prediction_idx = self.model.predict(features_scaled)
-            
-            # 4. 标签逆转（数字 -> 字符串）
-            result = self.label_encoder.inverse_transform(prediction_idx)[0]
-            return result
-        except Exception as e:
-            return f"Error during prediction: {str(e)}"
-
-# --- 供测试使用 ---
-if __name__ == "__main__":
-    detector = Detector()
-    # 模拟一条来自成员1的特征数据 (假设模型需要 5 个特征)
-    sample_traffic = [80, 6, 500, 1, 0] 
-    result = detector.predict(sample_traffic)
-    print(f"流量检测结果: {result}")
+        # 1. 转换为 DataFrame 并指定列名（确保与训练时特征对齐）
+        features_df = pd.DataFrame([feature_values], columns=self.feature_names)
+        
+        # 2. 使用训练时的 scaler 进行标准化
+        features_scaled = self.scaler.transform(features_df)
+        
+        # 3. 预测并转换标签
+        pred_idx = self.model.predict(features_scaled)
+        result = self.encoder.inverse_transform(pred_idx)[0]
+        return result

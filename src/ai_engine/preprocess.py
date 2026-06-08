@@ -1,81 +1,56 @@
 import pandas as pd
-import numpy as np
+import glob
 import os
-import sys
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-import joblib
+import numpy as np
 
-# 导入配置
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from config import (
-    FEATURE_COLUMNS, SCALER_FILE, LABEL_ENCODER_FILE, 
-    PROTOCOL_ENCODER_FILE, MODELS_DIR, PROTOCOL_MAP
-)
+def load_and_merge_parquet(folder_path):
+    all_files = glob.glob(os.path.join(folder_path, "*.parquet"))
+    data_list = []
+    
+    print(f"发现 {len(all_files)} 个数据文件，正在加载...")
+    
+    for file in all_files:
+        df = pd.read_parquet(file)
+        # CIC-IDS-2017 常见的清理工作：去掉空格前缀的列名
+        df.columns = df.columns.str.strip()
+        data_list.append(df)
+    
+    # 合并所有数据
+    full_df = pd.concat(data_list, axis=0, ignore_index=True)
+    
+    # 清理：处理无穷大(inf)和缺失值(NaN)，这是该数据集的常见问题
+    full_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    full_df.dropna(inplace=True)
+    
+    return full_df
 
-class DataPreprocessor:
-    def __init__(self):
-        self.label_encoder = LabelEncoder()
-        self.protocol_encoder = LabelEncoder()  # 分离的protocol编码器
-        self.scaler = StandardScaler()
-        self.feature_columns = FEATURE_COLUMNS
-        self.protocol_fitted = False
+def prepare_ids_data(folder_path):
+    df = load_and_merge_parquet(folder_path)
+    
+    # 1. 选择特征 (基于任务书和成员1能提取的字段)
+    # 注意：具体列名需要打印 df.columns 查看，以下是常见核心特征
+    features = [
+        'Destination Port', 'Protocol', 'Flow Duration', 
+        'Total Fwd Packets', 'Total Backward Packets',
+        'Fwd Packet Length Max', 'Bwd Packet Length Max'
+    ]
+    
+    # 确保这些列在数据集中存在
+    available_features = [f for f in features if f in df.columns]
+    
+    X = df[available_features]
+    y = df['Label']  # 数据集中通常有一列叫 Label
 
-    def clean_data(self, df):
-        """处理缺失值和异常值"""
-        df = df.dropna()
-        # 将协议等类别特征转换为数字（使用独立的protocol_encoder）
-        if 'protocol' in df.columns:
-            if not self.protocol_fitted:
-                df['protocol'] = self.protocol_encoder.fit_transform(df['protocol'])
-                self.protocol_fitted = True
-            else:
-                df['protocol'] = self.protocol_encoder.transform(df['protocol'])
-        return df
-
-    def process_for_training(self, csv_path, fit=True):
-        """
-        读取原始CSV并返回处理后的特征和标签
-        :param csv_path: 原始数据路径
-        :param fit: 是否拟合编码器和标准化器
-        :return: (X_scaled, y_encoded) 元组
-        """
-        if not os.path.exists(csv_path):
-            print(f"❌ 未找到原始数据: {csv_path}")
-            return None
-
-        df = pd.read_csv(csv_path)
-        df = self.clean_data(df)
-
-        # 分离特征和标签
-        X = df[self.feature_columns]
-        y = df['label']
-
-        # 编码标签 (Normal: 0, DDoS: 1, SQLi: 2, etc.)
-        if fit:
-            y_encoded = self.label_encoder.fit_transform(y)
-            X_scaled = self.scaler.fit_transform(X)
-        else:
-            y_encoded = self.label_encoder.transform(y)
-            X_scaled = self.scaler.transform(X)
-
-        return X_scaled, y_encoded
-
-    def save_tools(self):
-        """保存预处理工具供推理时使用"""
-        if not os.path.exists(MODELS_DIR):
-            os.makedirs(MODELS_DIR)
-        joblib.dump(self.scaler, SCALER_FILE)
-        joblib.dump(self.label_encoder, LABEL_ENCODER_FILE)
-        joblib.dump(self.protocol_encoder, PROTOCOL_ENCODER_FILE)
-        print("✅ 预处理工具（Scaler/Encoder）已保存")
-        print(f"   - Scaler: {SCALER_FILE}")
-        print(f"   - Label Encoder: {LABEL_ENCODER_FILE}")
-        print(f"   - Protocol Encoder: {PROTOCOL_ENCODER_FILE}")
-
-if __name__ == "__main__":
-    preprocessor = DataPreprocessor()
-    # 示例用法
-    # from config import RAW_DATASET_FILE
-    # X, y = preprocessor.process_for_training(RAW_DATASET_FILE, fit=True)
-    # preprocessor.save_tools()
-    pass
+    # 2. 标签处理
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    
+    # 3. 标准化
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    print(f"数据处理完成！总样本量: {len(X_scaled)}, 类别: {le.classes_}")
+    
+    return train_test_split(X_scaled, y_encoded, test_size=0.2), scaler, le
