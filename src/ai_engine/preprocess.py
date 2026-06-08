@@ -1,26 +1,44 @@
 import pandas as pd
 import numpy as np
+import os
+import sys
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import joblib
-import os
+
+# 导入配置
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from config import (
+    FEATURE_COLUMNS, SCALER_FILE, LABEL_ENCODER_FILE, 
+    PROTOCOL_ENCODER_FILE, MODELS_DIR, PROTOCOL_MAP
+)
 
 class DataPreprocessor:
     def __init__(self):
         self.label_encoder = LabelEncoder()
+        self.protocol_encoder = LabelEncoder()  # 分离的protocol编码器
         self.scaler = StandardScaler()
-        # 定义任务书要求的特征（示例，需根据成员1提供的特征调整）
-        self.feature_columns = ['src_port', 'dst_port', 'protocol', 'pkt_len', 'duration']
+        self.feature_columns = FEATURE_COLUMNS
+        self.protocol_fitted = False
 
     def clean_data(self, df):
         """处理缺失值和异常值"""
         df = df.dropna()
-        # 将协议等类别特征转换为数字
+        # 将协议等类别特征转换为数字（使用独立的protocol_encoder）
         if 'protocol' in df.columns:
-            df['protocol'] = df['protocol'].map({'TCP': 6, 'UDP': 17, 'ICMP': 1})
+            if not self.protocol_fitted:
+                df['protocol'] = self.protocol_encoder.fit_transform(df['protocol'])
+                self.protocol_fitted = True
+            else:
+                df['protocol'] = self.protocol_encoder.transform(df['protocol'])
         return df
 
-    def process_for_training(self, csv_path):
-        """读取原始CSV并保存为训练用的npy文件或清洗后的CSV"""
+    def process_for_training(self, csv_path, fit=True):
+        """
+        读取原始CSV并返回处理后的特征和标签
+        :param csv_path: 原始数据路径
+        :param fit: 是否拟合编码器和标准化器
+        :return: (X_scaled, y_encoded) 元组
+        """
         if not os.path.exists(csv_path):
             print(f"❌ 未找到原始数据: {csv_path}")
             return None
@@ -30,26 +48,34 @@ class DataPreprocessor:
 
         # 分离特征和标签
         X = df[self.feature_columns]
-        y = df['label'] # 假设标签列名为 'label'
+        y = df['label']
 
         # 编码标签 (Normal: 0, DDoS: 1, SQLi: 2, etc.)
-        y_encoded = self.label_encoder.fit_transform(y)
-        
-        # 特征标准化
-        X_scaled = self.scaler.fit_transform(X)
+        if fit:
+            y_encoded = self.label_encoder.fit_transform(y)
+            X_scaled = self.scaler.fit_transform(X)
+        else:
+            y_encoded = self.label_encoder.transform(y)
+            X_scaled = self.scaler.transform(X)
 
         return X_scaled, y_encoded
 
-    def save_tools(self, save_path="../../models/"):
+    def save_tools(self):
         """保存预处理工具供推理时使用"""
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-        joblib.dump(self.scaler, os.path.join(save_path, "scaler.pkl"))
-        joblib.dump(self.label_encoder, os.path.join(save_path, "label_encoder.pkl"))
+        if not os.path.exists(MODELS_DIR):
+            os.makedirs(MODELS_DIR)
+        joblib.dump(self.scaler, SCALER_FILE)
+        joblib.dump(self.label_encoder, LABEL_ENCODER_FILE)
+        joblib.dump(self.protocol_encoder, PROTOCOL_ENCODER_FILE)
         print("✅ 预处理工具（Scaler/Encoder）已保存")
+        print(f"   - Scaler: {SCALER_FILE}")
+        print(f"   - Label Encoder: {LABEL_ENCODER_FILE}")
+        print(f"   - Protocol Encoder: {PROTOCOL_ENCODER_FILE}")
 
 if __name__ == "__main__":
     preprocessor = DataPreprocessor()
     # 示例用法
-    # X, y = preprocessor.process_for_training("../../data/raw/dataset.csv")
+    # from config import RAW_DATASET_FILE
+    # X, y = preprocessor.process_for_training(RAW_DATASET_FILE, fit=True)
     # preprocessor.save_tools()
+    pass

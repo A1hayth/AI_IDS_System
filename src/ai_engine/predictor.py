@@ -1,25 +1,38 @@
 import joblib
 import os
+import sys
 import numpy as np
+
+# 导入配置
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from config import (
+    XGB_MODEL_FILE, SCALER_FILE, LABEL_ENCODER_FILE, 
+    PROTOCOL_ENCODER_FILE, MODELS_DIR
+)
 
 class Detector:
     def __init__(self, model_dir=None):
         """
         初始化检测器，加载模型和预处理工具
+        :param model_dir: 模型目录，不提供时使用配置文件中的路径
         """
-        # 默认路径指向项目根目录下的 models 文件夹
+        # 使用配置的目录
         if model_dir is None:
-            # 获取当前文件所在目录的上一级的上一级，即项目根目录
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            model_dir = os.path.join(current_dir, "../../models")
+            model_dir = MODELS_DIR
 
         try:
-            self.model = joblib.load(os.path.join(model_dir, "xgb_model.pkl"))
-            self.scaler = joblib.load(os.path.join(model_dir, "scaler.pkl"))
-            self.encoder = joblib.load(os.path.join(model_dir, "label_encoder.pkl"))
+            self.model = joblib.load(XGB_MODEL_FILE)
+            self.scaler = joblib.load(SCALER_FILE)
+            self.label_encoder = joblib.load(LABEL_ENCODER_FILE)
+            self.protocol_encoder = joblib.load(PROTOCOL_ENCODER_FILE)
             print("✅ AI 推理模型加载成功！")
+            print(f"   - XGBoost模型: {XGB_MODEL_FILE}")
+            print(f"   - 特征标准化器: {SCALER_FILE}")
+            print(f"   - 标签编码器: {LABEL_ENCODER_FILE}")
+            print(f"   - 协议编码器: {PROTOCOL_ENCODER_FILE}")
         except Exception as e:
             print(f"❌ 模型加载失败，请检查 models 文件夹。错误: {e}")
+            raise
 
     def predict(self, feature_list):
         """
@@ -38,7 +51,7 @@ class Detector:
             prediction_idx = self.model.predict(features_scaled)
             
             # 4. 标签逆转（数字 -> 字符串）
-            result = self.encoder.inverse_transform(prediction_idx)[0]
+            result = self.label_encoder.inverse_transform(prediction_idx)[0]
             return result
         except Exception as e:
             return f"Error during prediction: {str(e)}"
