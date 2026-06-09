@@ -1,7 +1,0 @@
-2026-06-08 20:46:17 | DEBUG    | feature_extractor | Flow 创建 | id=flow-000001 | key=('192.168.1.10', '8.8.8.8', 12345, 80, 6)
-2026-06-08 20:46:17 | INFO     | feature_extractor | Flow 超时回收 | id=flow-000001
-2026-06-08 20:46:40 | DEBUG    | feature_extractor | Flow 创建 | id=flow-000001 | key=('192.168.1.10', '8.8.8.8', 12345, 80, 6)
-2026-06-08 20:46:40 | INFO     | feature_extractor | Flow 超时回收 | id=flow-000001
-2026-06-08 20:46:40 | DEBUG    | feature_extractor | Flow 创建 | id=flow-000001 | key=('10.0.0.1', '10.0.0.2', 8080, 443, 6)
-2026-06-08 20:46:40 | INFO     | feature_extractor | 导出特征 CSV | path=D:/IT/College_project/AI_IDS_System/src/traffic_module/flow_features.csv | flows=1
-2026-06-08 20:46:40 | INFO     | feature_extractor | 特征 CSV 导出完成 → D:/IT/College_project/AI_IDS_System/src/traffic_module/flow_features.csv
