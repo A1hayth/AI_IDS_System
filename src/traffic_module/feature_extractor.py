@@ -43,10 +43,10 @@ FLOW_TIMEOUT: float = 60.0
 MAX_ACTIVE_FLOWS: int = 10000
 """活跃 Flow 最大数量，超过后强制回收最旧的已完成 Flow。"""
 
-CSV_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flow_features.csv")
+CSV_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports", "flow_features.csv")
 """特征 CSV 导出路径。"""
 
-LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feature_extractor.log")
+LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "feature_extractor.log")
 """日志文件路径。"""
 
 # ---------------------------------------------------------------------------

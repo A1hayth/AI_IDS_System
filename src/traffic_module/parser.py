@@ -32,7 +32,7 @@ if _PROJECT_ROOT not in sys.path:
 # 可配置参数
 # ---------------------------------------------------------------------------
 
-LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parser.log")
+LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "parser.log")
 """日志文件路径。"""
 
 MAX_PAYLOAD_LENGTH: int = 2000

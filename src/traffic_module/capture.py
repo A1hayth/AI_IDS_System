@@ -49,10 +49,10 @@ MAX_PACKET_CACHE: int = 10000
 MAX_RAW_CACHE: int = 2000
 """原始 Scapy 数据包缓存容量，供 parser.py 深度解析使用。"""
 
-CSV_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "traffic.csv")
+CSV_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports", "traffic.csv")
 """CSV 导出目标路径。"""
 
-LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "capture.log")
+LOG_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "capture.log")
 """日志文件路径。"""
 
 # ---------------------------------------------------------------------------
