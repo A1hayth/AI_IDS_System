@@ -96,6 +96,7 @@ class ParsedPacket:
     http_host: Optional[str] = None
     http_uri: Optional[str] = None
     user_agent: Optional[str] = None
+    tls_sni: Optional[str] = None       # TLS SNI 主机名（从 ClientHello 提取）
     payload: Optional[str] = None        # 原始载荷（截断至 2000 字符）
     is_http: bool = False
     is_https: bool = False
@@ -285,6 +286,121 @@ def _is_tls_handshake(payload: bytes) -> Tuple[bool, Optional[str]]:
         return False, None
 
 
+def _extract_tls_sni(payload: bytes) -> Optional[str]:
+    """从 TLS ClientHello 中提取 SNI 主机名。
+
+    TLS Record 格式 (RFC 5246):
+        byte 0:     content_type (0x16 = Handshake)
+        bytes 1-2:  version
+        bytes 3-4:  length (uint16 big-endian)
+
+    TLS Handshake (ClientHello):
+        byte 5:     handshake_type (0x01 = ClientHello)
+        bytes 6-8:  length (3-byte big-endian)
+        bytes 9-10: version
+        bytes 11-42: random (32 bytes)
+        byte 43:    session_id_length
+        ... session_id ...
+        ... cipher_suites ...
+        ... compression_methods ...
+        ... extensions ...
+            type=0x0000 → SNI → server_name
+
+    Returns:
+        SNI 主机名字符串，或 None（提取失败/扩展不存在）。
+    """
+    _MIN_LEN = 44  # TLS record(5) + handshake header(4) + version(2) + random(32) + session_id_len(1)
+    if not payload or len(payload) < _MIN_LEN:
+        return None
+
+    try:
+        # ---- TLS Record 验证 ----
+        if payload[0] != 0x16:  # ContentType: Handshake
+            return None
+
+        # ---- Handshake 验证 ----
+        if payload[5] != 0x01:  # HandshakeType: ClientHello
+            return None
+
+        # ---- 跳过 Session ID ----
+        session_id_len = payload[43]
+        pos = 44 + session_id_len
+
+        if pos + 2 > len(payload):
+            return None
+
+        # ---- 跳过 Cipher Suites ----
+        cipher_suites_len = int.from_bytes(payload[pos : pos + 2], "big")
+        pos += 2 + cipher_suites_len
+
+        if pos + 1 > len(payload):
+            return None
+
+        # ---- 跳过 Compression Methods ----
+        compression_len = payload[pos]
+        pos += 1 + compression_len
+
+        if pos + 2 > len(payload):
+            return None
+
+        # ---- 读取 Extensions ----
+        extensions_len = int.from_bytes(payload[pos : pos + 2], "big")
+        pos += 2
+        extensions_end = pos + extensions_len
+        if extensions_end > len(payload):
+            extensions_end = len(payload)
+
+        scanned = 0
+        max_scan = 8  # 最多扫描 8 个扩展
+        while pos + 4 <= extensions_end and scanned < max_scan:
+            scanned += 1
+            ext_type = int.from_bytes(payload[pos : pos + 2], "big")
+            ext_len = int.from_bytes(payload[pos + 2 : pos + 4], "big")
+            pos += 4
+
+            if ext_type == 0x0000:  # SNI extension
+                if pos + 2 > extensions_end:
+                    return None
+                # Server Name List
+                sni_list_len = int.from_bytes(payload[pos : pos + 2], "big")
+                pos += 2
+                sni_list_end = pos + sni_list_len
+                if sni_list_end > extensions_end:
+                    return None
+
+                # 遍历 Server Name 条目
+                while pos + 3 <= sni_list_end:
+                    name_type = payload[pos]
+                    name_len = int.from_bytes(payload[pos + 1 : pos + 3], "big")
+                    pos += 3
+                    if name_len <= 0 or pos + name_len > sni_list_end:
+                        break
+                    if name_type == 0x00:  # hostname
+                        if name_len > 256:
+                            break
+                        try:
+                            sni_hostname = (
+                                payload[pos : pos + name_len]
+                                .decode("ascii", errors="replace")
+                                .strip()
+                            )
+                        except Exception:
+                            break
+                        if sni_hostname:
+                            return sni_hostname
+                        break  # 找到 name_type=0 就停止，不管是否解码成功
+                    pos += name_len
+                return None  # SNI 扩展存在但无 hostname 条目
+
+            # 跳过非 SNI 扩展
+            pos += ext_len
+
+    except Exception:
+        _logger.debug("TLS SNI 提取异常", exc_info=True)
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # PacketParser
 # ---------------------------------------------------------------------------
@@ -441,9 +557,11 @@ class PacketParser:
             is_tls = True
 
         # Raw 层 TLS 握手检测
+        raw_load_for_sni: Optional[bytes] = None
         if packet.haslayer("Raw"):
             try:
                 raw_load = bytes(packet["Raw"].load)
+                raw_load_for_sni = raw_load
                 detected, label = _is_tls_handshake(raw_load)
                 if detected:
                     is_tls = True
@@ -454,6 +572,11 @@ class PacketParser:
             result.is_https = True
             result.protocol = "HTTPS"
             result.payload = _safe_str(label) if label else "TLS"
+            # 提取 TLS SNI
+            if raw_load_for_sni:
+                sni = _extract_tls_sni(raw_load_for_sni)
+                if sni:
+                    result.tls_sni = sni
             self._counters["https"] += 1
             return True
         return False

@@ -49,6 +49,9 @@ MAX_PACKET_CACHE: int = 10000
 MAX_RAW_CACHE: int = 2000
 """原始 Scapy 数据包缓存容量，供 parser.py 深度解析使用。"""
 
+TARGET_DOMAINS: List[str] = []
+"""目标域名列表，为空时捕获全部流量。"""
+
 CSV_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports", "traffic.csv")
 """CSV 导出目标路径。"""
 
@@ -293,6 +296,9 @@ _sniffer_thread: Optional[threading.Thread] = None
 _sniffer_lock = threading.Lock()
 _stop_event = threading.Event()
 
+# 域名过滤器（None 表示未启用）
+_domain_filter: Optional["DomainFilter"] = None
+
 # 统计标志
 _start_time: Optional[float] = None
 _stop_time: Optional[float] = None
@@ -303,7 +309,11 @@ _stop_time: Optional[float] = None
 # ---------------------------------------------------------------------------
 
 def _packet_callback(packet: Any) -> None:
-    """Scapy sniff 的回调：解析 → 缓存。"""
+    """Scapy sniff 的回调：域名过滤 → 解析 → 缓存。"""
+    # 域名过滤（三级检查：BPF IP / HTTP Host / TLS SNI）
+    if _domain_filter is not None and not _domain_filter.should_keep(packet):
+        return  # 静默丢弃
+
     # 缓存原始 Scapy 数据包供 parser.py 使用
     with _raw_cache_lock:
         _raw_cache.append(packet)
@@ -345,6 +355,13 @@ def start_capture(
         _iface = _iface if _iface is not None else DEFAULT_INTERFACE
         bp_filter = bpf_filter if bpf_filter is not None else DEFAULT_FILTER
 
+        # 域名过滤：将目标域名 IP 注入 BPF 过滤器
+        if _domain_filter is not None:
+            bp_extension = _domain_filter.build_bpf_extension()
+            if bp_extension:
+                bp_filter = f"({bp_filter}) and {bp_extension}"
+                _logger.info("BPF 扩展（域名过滤）| 新过滤器=%s", bp_filter)
+
         _logger.info("启动抓包 | iface=%s | filter=%s | timeout=%s",
                       _iface or "<default>", bp_filter, timeout)
         _logger.info("缓存容量: %d 条", MAX_PACKET_CACHE)
@@ -377,7 +394,7 @@ def start_capture(
 
 def stop_capture() -> None:
     """停止抓包并等待后台线程退出。"""
-    global _sniffer_thread, _stop_time
+    global _sniffer_thread, _stop_time, _domain_filter
 
     with _sniffer_lock:
         if _sniffer_thread is None:
@@ -395,6 +412,53 @@ def stop_capture() -> None:
         _logger.info("抓包已停止 | 共捕获 %d 条数据包 | 运行 %.1f 秒",
                       len(_cache), duration)
         _sniffer_thread = None
+
+    # 停止 DNS 刷新线程
+    if _domain_filter is not None:
+        _domain_filter.shutdown()
+
+
+def set_target_domains(domains: List[str]) -> None:
+    """设置目标域名并初始化域名过滤器。
+
+    调用此函数会：
+        1. 触发 DNS 预解析（阻塞，最多 10 秒）
+        2. 构建扩展 BPF 过滤器
+        3. 如果抓包已在运行，不会自动生效（需先 stop 再 start）
+
+    Args:
+        domains: 目标域名字符串列表，例如 ``["example.com", "test.org"]``。
+                 传入空列表则关闭域名过滤。
+    """
+    global _domain_filter, TARGET_DOMAINS
+
+    TARGET_DOMAINS = list(domains)  # 防御性拷贝
+
+    if domains:
+        from .domain_filter import DomainFilter  # noqa: E402
+
+        _domain_filter = DomainFilter(domains)
+        _logger.info(
+            "域名过滤已启用 | domains=%s | resolved IPs=%d",
+            TARGET_DOMAINS,
+            _domain_filter.ip_count(),
+        )
+    else:
+        if _domain_filter is not None:
+            _domain_filter.shutdown()
+        _domain_filter = None
+        _logger.info("域名过滤已关闭（捕获全部流量）")
+
+
+def get_domain_filter_stats() -> Optional[Dict[str, Any]]:
+    """返回域名过滤器的当前统计信息。
+
+    Returns:
+        字典形式的统计信息，或 None（域名过滤未启用时）。
+    """
+    if _domain_filter is None:
+        return None
+    return _domain_filter.get_statistics()
 
 
 def get_packet_count() -> int:
