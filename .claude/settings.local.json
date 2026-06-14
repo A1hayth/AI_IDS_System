@@ -10,7 +10,9 @@
       "Bash(mv -v flow_features.csv exports/)",
       "Bash(git rm *)",
       "Bash(python run.py -t 3 --no-capture -o /d/IT/College_project/AI_IDS_System/src/traffic_module/exports/test_run.csv)",
-      "Bash(pip list *)"
+      "Bash(pip list *)",
+      "Bash(powershell -Command ' *)",
+      "Bash(/d/Python/python.exe -c \"import py_compile; py_compile.compile\\('d:/IT/College_project/AI_IDS_System/src/traffic_module/traffic_monitor.py', doraise=True\\); print\\('Syntax OK'\\)\")"
     ]
   }
 }
