@@ -7,7 +7,29 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# 忽略运行时日志与导出数据
+src/traffic_module/logs/*.log
+src/traffic_module/exports/*.csv
+
+# 但保留目录结构
+!src/traffic_module/logs/.gitkeep
+!src/traffic_module/exports/.gitkeep
+
 # 忽略模型和缓存
 models/*.pkl
 __pycache__/
 *.zip
+
+# 编译后的字节码
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境（绝对不能上传）
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/

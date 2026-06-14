@@ -7,3 +7,4 @@ pyarrow
 fastparquet
 matplotlib
 seaborn
+scapy
