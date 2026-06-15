@@ -8,3 +8,4 @@ fastparquet
 matplotlib
 seaborn
 scapy
+mysql.connector

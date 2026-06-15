@@ -33,3 +33,6 @@ ENV/
 
 # Jupyter Notebook 检查点
 .ipynb_checkpoints/
+
+# 忽略claude相关文件
+claude/
