@@ -38,4 +38,4 @@ ENV/
 claude/
 
 # 忽略log文件
-logs/
+*.log
