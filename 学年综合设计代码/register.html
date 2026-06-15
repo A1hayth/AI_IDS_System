@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>干员录入 - DEFCON-X 防御中枢</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            background: radial-gradient(circle at 50% 50%, #0f172a 0%, #020617 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+
+        .scanline {
+            width: 100%; height: 100vh; z-index: 0; position: absolute; pointer-events: none;
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(56, 189, 248, 0.08) 50%, rgba(255,255,255,0));
+            background-size: 100% 8px;
+            animation: pan-overlay 15s infinite linear;
+        }
+        @keyframes pan-overlay { from { background-position: 0 0; } to { background-position: 0 -100vh; } }
+
+        .cyber-grid {
+            position: absolute; inset: 0; z-index: 0;
+            background-image:
+                linear-gradient(rgba(56, 189, 248, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(56, 189, 248, 0.05) 1px, transparent 1px);
+            background-size: 30px 30px;
+            animation: pulse-grid 4s infinite alternate ease-in-out;
+        }
+        @keyframes pulse-grid { 0% { opacity: 0.3; } 100% { opacity: 0.8; } }
+
+        .cyber-card {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            box-shadow: 0 0 20px rgba(2, 132, 199, 0.2);
+            position: relative;
+            z-index: 10;
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease, border-color 0.4s ease;
+        }
+        .cyber-card:hover {
+            transform: translateY(-4px) scale(1.005);
+            box-shadow: 0 15px 40px rgba(2, 132, 199, 0.5);
+            border-color: rgba(56, 189, 248, 0.6);
+        }
+
+        .neon-text { text-shadow: 0 0 12px rgba(56, 189, 248, 0.8); }
+
+        .input-box {
+            background-color: #1e293b;
+            border: 1px solid #475569;
+            border-left: 3px solid #475569;
+            border-radius: 0.25rem;
+            padding: 0.6rem 0.75rem;
+            color: white;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        .input-box:focus {
+            border-color: #3b82f6;
+            border-left: 4px solid #38bdf8;
+            background-color: #0f172a;
+            box-shadow: 4px 4px 15px rgba(59, 130, 246, 0.2) inset, 0 0 15px rgba(59, 130, 246, 0.4);
+            transform: translateX(4px);
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center">
+    <div class="cyber-grid"></div>
+    <div class="scanline"></div>
+
+    <div id="app" class="w-full max-w-xl p-6">
+        <div class="cyber-card rounded-md p-10 group">
+
+            <div class="text-center mb-8 relative">
+                <div class="w-14 h-14 mx-auto bg-sky-900/30 rounded border border-sky-500/50 shadow-[0_0_15px_rgba(56,189,248,0.4)] mb-4 flex items-center justify-center transition-all duration-500 group-hover:rotate-180 group-hover:bg-sky-800/50 group-hover:shadow-[0_0_25px_rgba(56,189,248,0.8)]">
+                    <span class="text-2xl transform transition-transform duration-500 group-hover:-rotate-180">💠</span>
+                </div>
+                <h1 class="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500 tracking-widest neon-text">
+                    DEFCON-X 系统录入
+                </h1>
+                <p class="text-sky-500/70 text-sm mt-2 font-mono animate-pulse">=== 新干员注册协议激活 ===</p>
+            </div>
+
+            <form @submit.prevent="handleRegister" class="space-y-6">
+
+                <div>
+                    <label class="block text-xs font-bold text-sky-400 uppercase tracking-wider mb-2 transition-colors">标识 ID (Username)</label>
+                    <input type="text" v-model="form.username" required placeholder="请输入登录账号" class="input-box w-full text-base font-mono" :disabled="isLoading">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-sky-400 uppercase tracking-wider mb-2">访问密钥 (Password)</label>
+                    <input type="password" v-model="form.password" required placeholder="设置 6 位以上密码" minlength="6" class="input-box w-full text-base font-mono" :disabled="isLoading">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-sky-400 uppercase tracking-wider mb-2">密钥确认 (Confirm)</label>
+                    <input type="password" v-model="form.confirmPassword" required placeholder="请再次输入密码" class="input-box w-full text-base font-mono" :disabled="isLoading">
+                    <p v-if="passwordMismatch" class="text-red-400 text-xs mt-2 font-mono animate-bounce">⚠️ 两次输入的密钥不匹配，请重新校对。</p>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-sky-400 uppercase tracking-wider mb-2">系统授权码 (Identity Code)</label>
+                    <input type="text" v-model="form.identityCode" required placeholder="请输入高层下发的授权码" class="input-box w-full text-base font-mono" :disabled="isLoading">
+                    <p class="text-slate-500 text-xs mt-2">注：决定您的系统权限等级 (Admin/User)</p>
+                </div>
+
+                <div v-if="errorMessage" class="bg-red-950/80 border border-red-500 text-red-400 text-sm px-4 py-3 rounded-sm flex items-center shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse">
+                    <span class="mr-2">❌</span> {{ errorMessage }}
+                </div>
+
+                <div v-if="successMessage" class="bg-green-950/80 border border-green-500 text-green-400 text-sm px-4 py-3 rounded-sm flex items-center shadow-[0_0_15px_rgba(34,197,94,0.3)] animate-pulse">
+                    <span class="mr-2">✅</span> {{ successMessage }}
+                </div>
+
+                <button type="submit" :disabled="isLoading || passwordMismatch"
+                        class="w-full bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-500 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-sm shadow-[0_0_15px_rgba(2,132,199,0.5)] hover:shadow-[0_0_25px_rgba(56,189,248,0.8)] transition-all uppercase tracking-widest mt-8 relative overflow-hidden group text-lg hover:-translate-y-0.5 active:translate-y-1">
+                    <span class="relative z-10">{{ isLoading ? '数据写入中...' : '建立安全连接 (Register)' }}</span>
+                    <div class="absolute inset-0 h-full w-full bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full group-hover:animate-[shimmer_1s_infinite]"></div>
+                </button>
+            </form>
+
+            <div class="mt-8 text-center">
+                <a href="login.html" class="text-slate-400 hover:text-sky-400 text-sm transition-all border-b border-transparent hover:border-sky-400 pb-1 hover:tracking-wide">
+                    [ 已有授权？返回登录接口 ]
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed } = Vue;
+        axios.defaults.baseURL = 'http://localhost:8080';
+
+        createApp({
+            setup() {
+                const form = ref({ username: '', password: '', confirmPassword: '', identityCode: '' });
+                const errorMessage = ref('');
+                const successMessage = ref('');
+                const isLoading = ref(false);
+
+                const passwordMismatch = computed(() => {
+                    return form.value.confirmPassword !== '' && form.value.password !== form.value.confirmPassword;
+                });
+
+                const handleRegister = async () => {
+                    errorMessage.value = '';
+                    successMessage.value = '';
+
+                    if (passwordMismatch.value) return;
+                    if (form.value.password.length < 6) {
+                        errorMessage.value = '访问密钥安全等级过低，需至少 6 个字符。';
+                        return;
+                    }
+
+                    isLoading.value = true;
+
+                    try {
+                        const payload = {
+                            username: form.value.username,
+                            password: form.value.password,
+                            identityCode: form.value.identityCode
+                        };
+
+                        const response = await axios.post('/api/v1/auth/register', payload);
+                        const resData = response.data;
+
+                        if (resData.code === 200) {
+                            successMessage.value = resData.msg;
+                            setTimeout(() => {
+                                window.location.href = 'login.html';
+                            }, 1500);
+                        } else {
+                            errorMessage.value = resData.msg || '注册失败，请重试';
+                        }
+                    } catch (error) {
+                        errorMessage.value = error.response
+                            ? (error.response.data.msg || '服务器端发生错误')
+                            : '网络请求失败，请检查后端服务是否启动';
+                    } finally {
+                        isLoading.value = false;
+                    }
+                };
+
+                return { form, errorMessage, successMessage, isLoading, passwordMismatch, handleRegister };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
