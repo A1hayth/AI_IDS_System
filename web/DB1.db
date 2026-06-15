@@ -1,8 +1,26 @@
--- 1. 创建数据库（如果你们已经建了，这句可以跳过）
-CREATE DATABASE IF NOT EXISTS ai_monitor_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- 创建数据库（如果你们已经建了，这句可以跳过）
+CREATE DATABASE IF NOT EXISTS ai_ids_system DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 切换到该数据库
-USE ai_monitor_db;
+USE ai_ids_system;
+
+-- ==========================================
+-- 1.创建流量特征表 (flow_features)
+-- ==========================================
+CREATE TABLE flow_features (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    target_host VARCHAR(255),
+    target_ip VARCHAR(45),
+    protocol INT NOT NULL,
+    flow_duration DOUBLE NOT NULL,
+    total_fwd_packets INT NOT NULL,
+    total_backward_packets INT NOT NULL,
+    fwd_packet_length_max INT NOT NULL,
+    bwd_packet_length_max INT NOT NULL,
+    INDEX idx_create_time (create_time),
+    INDEX idx_target_ip (target_ip)
+);
 
 -- ==========================================
 -- 2. 创建用户信息表 (sys_users)

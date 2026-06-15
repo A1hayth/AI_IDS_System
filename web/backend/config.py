@@ -8,9 +8,9 @@ import pymysql.cursors
 DB_CONFIG = {
     'host': 'localhost',
     'port': 3306,
-    'user': 'root',
-    'password': '040810',
-    'database': 'ai_monitor_db',
+    'user': 'AIIDS',
+    'password': '123456',
+    'database': 'ai_ids_system',
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor,  # 查询结果自动转为字典
     'autocommit': True,
