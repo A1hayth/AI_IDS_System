@@ -36,17 +36,31 @@ class Detector:
         输出: 攻击类型字符串 (如 'Benign', 'DoS Hulk', 'PortScan' 等)
         """
         try:
-            # 1. 转为 numpy 2D 数组 (1, N)，绕过 XGBoost 特征名检查
             data = np.array(feature_values, dtype=np.float64).reshape(1, -1)
-
-            # 2. 标准化
             data_scaled = self.scaler.transform(data)
-
-            # 3. 推理
             pred_idx = self.model.predict(data_scaled)
-
-            # 4. 解码标签
             attack_type = self.encoder.inverse_transform(pred_idx)[0]
             return attack_type
         except Exception as e:
             return f"Error: {str(e)}"
+
+    def predict_proba(self, feature_values):
+        """
+        输入: 与 predict() 相同
+        输出: (attack_type, confidence) 元组
+              - attack_type: 预测的攻击类型字符串
+              - confidence: 置信度 0.0~1.0
+        """
+        try:
+            data = np.array(feature_values, dtype=np.float64).reshape(1, -1)
+            data_scaled = self.scaler.transform(data)
+
+            # 获取概率分布
+            proba = self.model.predict_proba(data_scaled)[0]
+            pred_idx = int(np.argmax(proba))
+            confidence = float(proba[pred_idx])
+
+            attack_type = self.encoder.inverse_transform([pred_idx])[0]
+            return attack_type, confidence
+        except Exception as e:
+            return f"Error: {str(e)}", 0.0

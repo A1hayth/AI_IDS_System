@@ -5,7 +5,14 @@
       "Bash(.venv/Scripts/python -c ' *)",
       "Bash(.venv/Scripts/python src/ai_engine/run_pipeline.py --dry-run)",
       "Bash(.venv/Scripts/python src/ai_engine/run_pipeline.py)",
-      "Bash(.venv/Scripts/python src/ai_engine/run_pipeline.py --all)"
+      "Bash(.venv/Scripts/python src/ai_engine/run_pipeline.py --all)",
+      "Bash(.venv/Scripts/python src/ai_engine/run_pipeline.py --once)",
+      "Bash(.venv/Scripts/python main.py --once)",
+      "Bash(.venv/Scripts/python main.py --help)",
+      "Bash(.venv/Scripts/python src/traffic_module/generate_attack_traffic.py --list)",
+      "Bash(dir src\\\\traffic_module\\\\generate*)",
+      "Bash(ls \"D:\\\\\\\\IT\\\\\\\\College_project\\\\\\\\AI_IDS_System\\\\\\\\src\\\\\\\\traffic_module\\\\\\\\generate_attack_traffic.py\")",
+      "Bash(.venv/Scripts/python src/traffic_module/generate_attack_traffic.py --all --count 3 --benign 5)"
     ]
   }
 }
