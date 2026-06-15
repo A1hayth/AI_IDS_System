@@ -36,3 +36,6 @@ ENV/
 
 # 忽略claude相关文件
 claude/
+
+# 忽略log文件
+logs/

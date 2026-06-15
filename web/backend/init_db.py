@@ -35,11 +35,11 @@ def init():
         conn = pymysql.connect(**ROOT_CONFIG)
         with conn.cursor() as cur:
             cur.execute(
-                "CREATE DATABASE IF NOT EXISTS ai_monitor_db "
+                "CREATE DATABASE IF NOT EXISTS ai_ids_system "
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.close()
-        print('✓ 数据库 ai_monitor_db 已就绪')
+        print('✓ 数据库 ai_ids_system 已就绪')
     except pymysql.Error as e:
         print(f'✗ 创建数据库失败: {e}')
         print('  请手动在 MySQL 中执行 DB1.db 中的建库语句')
