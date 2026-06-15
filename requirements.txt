@@ -9,3 +9,6 @@ matplotlib
 seaborn
 scapy
 mysql.connector
+Flask==3.1.0
+flask-cors==5.0.1
+PyMySQL==1.1.1
