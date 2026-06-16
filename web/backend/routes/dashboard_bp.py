@@ -2,7 +2,7 @@
 数据统计接口
 
 GET /api/v1/dashboard/overview      总访问量、总攻击量、高危数、独立攻击IP数
-GET /api/v1/dashboard/trend         今日流量与攻击趋势（按小时）
+GET /api/v1/dashboard/trend         今日流量与攻击趋势（5分钟粒度，按 timestamp 分布）
 GET /api/v1/dashboard/attack-types  今日攻击类型分布
 GET /api/v1/dashboard/logs          分页获取攻击日志列表
 """
@@ -62,12 +62,18 @@ def trend():
             with conn.cursor() as cur:
                 sql = """
                     SELECT
-                        DATE_FORMAT(timestamp, '%%H:00') AS hour,
-                        COUNT(*)                          AS traffic_count,
-                        COALESCE(SUM(is_attack), 0)       AS attack_count
+                        CONCAT(
+                            DATE_FORMAT(timestamp, '%%H:'),
+                            LPAD(FLOOR(MINUTE(timestamp) / 5) * 5, 2, '0')
+                        )                          AS hour,
+                        COUNT(*)                    AS traffic_count,
+                        COALESCE(SUM(is_attack), 0) AS attack_count
                     FROM traffic_logs
                     WHERE DATE(timestamp) = CURDATE()
-                    GROUP BY DATE_FORMAT(timestamp, '%%H:00')
+                    GROUP BY CONCAT(
+                            DATE_FORMAT(timestamp, '%%H:'),
+                            LPAD(FLOOR(MINUTE(timestamp) / 5) * 5, 2, '0')
+                        )
                     ORDER BY hour
                 """
                 cur.execute(sql)

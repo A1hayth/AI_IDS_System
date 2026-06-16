@@ -101,21 +101,22 @@
 
         // 从后端获取总览数据
         axios.get('/api/v1/dashboard/overview')
-          .then(res => {
-            if (res.data.code === 200) {
-              overviewData.value = res.data.data;
-            }
-          })
-          .catch(err => console.error('获取总览数据失败:', err));
+                .then(res => {
+                  if (res.data.code === 200) {
+                    overviewData.value = res.data.data;
+                  }
+                })
+                .catch(err => console.error('获取总览数据失败:', err));
 
         // 从后端获取攻击日志列表
         axios.get('/api/v1/dashboard/logs', { params: { page: 1, size: 20 } })
-          .then(res => {
-            if (res.data.code === 200) {
-              logList.value = res.data.data.list;
-            }
-          })
-          .catch(err => console.error('获取日志列表失败:', err));
+                .then(res => {
+                  if (res.data.code === 200) {
+                    // 【核心修改 1】：通过 .reverse() 将数组反转，确保最新的一定显示在最上方
+                    logList.value = res.data.data.list.reverse();
+                  }
+                })
+                .catch(err => console.error('获取日志列表失败:', err));
 
         updateCharts();
       };
@@ -125,44 +126,46 @@
 
         // 从后端获取趋势数据
         axios.get('/api/v1/dashboard/trend')
-          .then(res => {
-            if (res.data.code === 200) {
-              const d = res.data.data;
-              const normalTraffic = d.traffic.map((v, i) => v - d.attacks[i]);
-              trendChartInstance.setOption({
-                backgroundColor: 'transparent',
-                tooltip: { trigger: 'axis' },
-                legend: { data: ['正常流量', '拦截攻击'] },
-                xAxis: { type: 'category', data: d.hours },
-                yAxis: { type: 'value' },
-                series: [
-                  { name: '正常流量', type: 'line', smooth: true, itemStyle: { color: '#3b82f6' }, data: normalTraffic },
-                  { name: '拦截攻击', type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, data: d.attacks }
-                ]
-              });
-            }
-          })
-          .catch(err => console.error('获取趋势数据失败:', err));
+                .then(res => {
+                  if (res.data.code === 200) {
+                    const d = res.data.data;
+                    const normalTraffic = d.traffic.map((v, i) => v - d.attacks[i]);
+
+                    // 直接使用数据库中 timestamp 分布的时间标签
+                    trendChartInstance.setOption({
+                      backgroundColor: 'transparent',
+                      tooltip: { trigger: 'axis' },
+                      legend: { data: ['正常流量', '拦截攻击'] },
+                      xAxis: { type: 'category', data: d.hours },
+                      yAxis: { type: 'value' },
+                      series: [
+                        { name: '正常流量', type: 'line', smooth: true, itemStyle: { color: '#3b82f6' }, data: normalTraffic },
+                        { name: '拦截攻击', type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, data: d.attacks }
+                      ]
+                    });
+                  }
+                })
+                .catch(err => console.error('获取趋势数据失败:', err));
 
         if (!typeChartInstance) typeChartInstance = echarts.init(document.getElementById('typeChart'), 'dark');
 
         // 从后端获取攻击类型分布
         axios.get('/api/v1/dashboard/attack-types')
-          .then(res => {
-            if (res.data.code === 200) {
-              typeChartInstance.setOption({
-                backgroundColor: 'transparent',
-                tooltip: { trigger: 'item' },
-                series: [{
-                  type: 'pie',
-                  radius: ['40%', '70%'],
-                  itemStyle: { borderRadius: 5, borderColor: '#1e293b', borderWidth: 2 },
-                  data: res.data.data
-                }]
-              });
-            }
-          })
-          .catch(err => console.error('获取攻击类型分布失败:', err));
+                .then(res => {
+                  if (res.data.code === 200) {
+                    typeChartInstance.setOption({
+                      backgroundColor: 'transparent',
+                      tooltip: { trigger: 'item' },
+                      series: [{
+                        type: 'pie',
+                        radius: ['40%', '70%'],
+                        itemStyle: { borderRadius: 5, borderColor: '#1e293b', borderWidth: 2 },
+                        data: res.data.data
+                      }]
+                    });
+                  }
+                })
+                .catch(err => console.error('获取攻击类型分布失败:', err));
       };
 
       onMounted(() => {
