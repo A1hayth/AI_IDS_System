@@ -162,8 +162,10 @@ def calculate_severity(attack_type: str) -> str:
 
 def generate_ai_reason(features: list, attack_type: str) -> str:
     """
-    根据 6 维特征值自动生成中文 AI 判定理由。
-    features: [protocol, flow_duration, total_fwd, total_bwd, fwd_max, bwd_max]
+    根据 15 维特征值自动生成中文 AI 判定理由 (v3)。
+    features: [protocol, flow_duration, total_fwd, total_bwd, fwd_max, bwd_max,
+               fwd_mean, bwd_mean, bytes_ps, pkts_ps, fwd_iat, bwd_iat,
+               syn_cnt, fin_cnt, rst_cnt]
     """
     proto_map = {6: "TCP", 17: "UDP"}
     proto = proto_map.get(int(features[0]), f"Protocol({features[0]})")
@@ -173,30 +175,38 @@ def generate_ai_reason(features: list, attack_type: str) -> str:
     fwd_len_max = int(features[4])
     total_pkts = fwd_pkts + bwd_pkts
 
+    # v3 扩展特征
+    bytes_ps = float(features[8]) if len(features) > 8 else 0
+    fwd_iat = float(features[10]) if len(features) > 10 else 0
+    syn_cnt = int(features[12]) if len(features) > 12 else 0
+    rst_cnt = int(features[14]) if len(features) > 14 else 0
+
     if attack_type in ("Benign", "Normal"):
         return (f"流量特征均衡，协议 {proto}，前向/反向报文比 {fwd_pkts}/{bwd_pkts}，"
-                f"流持续时间 {duration:.2f}μs，判定为常规无害会话。")
+                f"流持续时间 {duration:.2f}μs，速率 {bytes_ps:.0f}B/s，判定为常规无害会话。")
     elif attack_type == "DoS Hulk":
         return (f"检测到瞬时高并发前向载荷。前向报文最大长度 {fwd_len_max}B，"
-                f"前向总报文数 ({fwd_pkts}) 异常偏高，与 HTTP Hulk DoS 特征强吻合。")
+                f"前向 IAT 均值 {fwd_iat:.6f}s，前向总报文数 ({fwd_pkts}) 异常偏高，"
+                f"与 HTTP Hulk DoS 特征强吻合。")
     elif attack_type == "DoS slowloris":
         return (f"流持续时间极长 ({duration:.1f}μs)，而报文总数极低 (仅 {total_pkts} 个包)，"
-                f"涉嫌利用 Slowloris 耗尽服务器线程池。")
+                f"速率仅 {bytes_ps:.1f}B/s，涉嫌利用 Slowloris 耗尽服务器线程池。")
     elif attack_type == "DDoS":
         return (f"检测到高密度不对称流量突发。前/反向报文比例严重失衡，"
-                f"前向包数 {fwd_pkts}，判定为协同分布式拒绝服务攻击。")
+                f"前向包数 {fwd_pkts}，流量速率 {bytes_ps:.0f}B/s，"
+                f"判定为协同分布式拒绝服务攻击。")
     elif attack_type == "PortScan":
-        return (f"流生存期极短 ({duration:.2f}μs) 且前向最大报文无应用负载 (Fwd Max=0)，"
-                f"识别为快速 SYN 静默扫描探测。")
+        return (f"流生存期极短 ({duration:.2f}μs)，SYN={syn_cnt} RST={rst_cnt}，"
+                f"前向 IAT 均值 {fwd_iat:.6f}s，识别为快速 SYN 静默扫描探测。")
     elif attack_type == "Bot":
         return (f"通信模式展现僵尸网络(Botnet)控端与受控主机的低频心跳特征，"
-                f"已标记为可疑僵尸会话。")
+                f"IAT 均值 {fwd_iat:.3f}s，已标记为可疑僵尸会话。")
     elif "Web Attack" in attack_type or "SQL" in attack_type or "Brute" in attack_type:
         return (f"检测到 Web 应用层攻击特征，协议 {proto}，前向报文最大长度 {fwd_len_max}B，"
                 f"分类为 [{attack_type}]。")
     else:
         return (f"异常流量命中特征偏移，协议 {proto}，前/反向发包比 {fwd_pkts}/{bwd_pkts}，"
-                f"判定攻击分类为 [{attack_type}]。")
+                f"速率 {bytes_ps:.0f}B/s，判定攻击分类为 [{attack_type}]。")
 
 
 # ============================================================================

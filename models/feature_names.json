@@ -1,11 +1,21 @@
 {
+  "version": "v3",
   "model_feature_columns": [
     "protocol",
     "flow_duration",
     "total_fwd_packets",
     "total_backward_packets",
     "fwd_packet_length_max",
-    "bwd_packet_length_max"
+    "bwd_packet_length_max",
+    "fwd_packet_length_mean",
+    "bwd_packet_length_mean",
+    "flow_bytes_per_sec",
+    "flow_packets_per_sec",
+    "fwd_iat_mean",
+    "bwd_iat_mean",
+    "syn_flag_count",
+    "fin_flag_count",
+    "rst_flag_count"
   ],
   "db_feature_columns": [
     "Protocol",
@@ -13,10 +23,19 @@
     "Total_Fwd_Packets",
     "Total_Backward_Packets",
     "Fwd_Packet_Length_Max",
-    "Bwd_Packet_Length_Max"
+    "Bwd_Packet_Length_Max",
+    "Fwd_Packet_Length_Mean",
+    "Bwd_Packet_Length_Mean",
+    "Flow_Bytes_Per_Sec",
+    "Flow_Packets_Per_Sec",
+    "Fwd_IAT_Mean",
+    "Bwd_IAT_Mean",
+    "SYN_Flag_Count",
+    "FIN_Flag_Count",
+    "RST_Flag_Count"
   ],
-  "feature_count": 6,
-  "num_classes": 14,
+  "feature_count": 15,
+  "num_classes": 12,
   "classes": [
     "Benign",
     "Bot",
@@ -26,11 +45,31 @@
     "DoS Slowhttptest",
     "DoS slowloris",
     "FTP-Patator",
-    "Infiltration",
     "PortScan",
     "SSH-Patator",
-    "Web Attack � Brute Force",
-    "Web Attack � Sql Injection",
-    "Web Attack � XSS"
-  ]
+    "Web Attack - Brute Force",
+    "Web Attack - XSS"
+  ],
+  "smote_applied": true,
+  "calibration": "sigmoid_cv3",
+  "cv_macro_f1_mean": 0.9382283424030652,
+  "test_accuracy": 0.9500444588149705,
+  "test_macro_f1": 0.8245974047736097,
+  "feature_importances": {
+    "protocol": 0.18845798075199127,
+    "syn_flag_count": 0.1548561006784439,
+    "total_backward_packets": 0.09806421399116516,
+    "bwd_packet_length_mean": 0.09515878558158875,
+    "bwd_packet_length_max": 0.06747888028621674,
+    "fwd_packet_length_mean": 0.06272130459547043,
+    "fwd_packet_length_max": 0.061599645763635635,
+    "bwd_iat_mean": 0.05807453393936157,
+    "flow_bytes_per_sec": 0.05162273719906807,
+    "fin_flag_count": 0.03499683737754822,
+    "total_fwd_packets": 0.032526735216379166,
+    "fwd_iat_mean": 0.03161579743027687,
+    "flow_duration": 0.03156261146068573,
+    "flow_packets_per_sec": 0.03126384690403938,
+    "rst_flag_count": 0.0
+  }
 }

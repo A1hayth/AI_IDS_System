@@ -186,7 +186,7 @@ class DatabaseManager:
     所有数据库异常均被捕获并记录日志，不会向上传播导致程序崩溃。
     """
 
-    # 表结构 SQL
+    # 表结构 SQL (v3: 15 特征列)
     CREATE_TABLE_SQL: str = """
         CREATE TABLE IF NOT EXISTS flow_features (
             id              BIGINT          AUTO_INCREMENT PRIMARY KEY,
@@ -208,22 +208,58 @@ class DatabaseManager:
                                             COMMENT '前向最大包长(字节)',
             Bwd_Packet_Length_Max   DOUBLE  NOT NULL DEFAULT 0.0
                                             COMMENT '后向最大包长(字节)',
+            Fwd_Packet_Length_Mean  DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '前向平均包长(字节)',
+            Bwd_Packet_Length_Mean  DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '后向平均包长(字节)',
+            Flow_Bytes_Per_Sec      DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '流字节速率(字节/秒)',
+            Flow_Packets_Per_Sec    DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '流包速率(包/秒)',
+            Fwd_IAT_Mean            DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '前向包到达间隔均值(秒)',
+            Bwd_IAT_Mean            DOUBLE  NOT NULL DEFAULT 0.0
+                                            COMMENT '后向包到达间隔均值(秒)',
+            SYN_Flag_Count          INT     NOT NULL DEFAULT 0
+                                            COMMENT 'SYN标志计数',
+            FIN_Flag_Count          INT     NOT NULL DEFAULT 0
+                                            COMMENT 'FIN标志计数',
+            RST_Flag_Count          INT     NOT NULL DEFAULT 0
+                                            COMMENT 'RST标志计数',
             INDEX idx_create_time (create_time),
             INDEX idx_target_host (target_host),
             INDEX idx_target_ip (target_ip),
             INDEX idx_protocol (Protocol)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        COMMENT='AI-IDS 流特征表 — 供 AI 模块与告警平台读取';
+        COMMENT='AI-IDS 流特征表 (v3) — 供 AI 模块与告警平台读取';
     """
 
-    # 批量插入 SQL
+    # v3 新增列定义（列名, 类型, 默认值, 注释）
+    MIGRATE_COLUMNS: List[Tuple[str, str, str, str]] = [
+        ("Fwd_Packet_Length_Mean", "DOUBLE", "0.0", "前向平均包长(字节)"),
+        ("Bwd_Packet_Length_Mean", "DOUBLE", "0.0", "后向平均包长(字节)"),
+        ("Flow_Bytes_Per_Sec", "DOUBLE", "0.0", "流字节速率(字节/秒)"),
+        ("Flow_Packets_Per_Sec", "DOUBLE", "0.0", "流包速率(包/秒)"),
+        ("Fwd_IAT_Mean", "DOUBLE", "0.0", "前向包到达间隔均值(秒)"),
+        ("Bwd_IAT_Mean", "DOUBLE", "0.0", "后向包到达间隔均值(秒)"),
+        ("SYN_Flag_Count", "INT", "0", "SYN标志计数"),
+        ("FIN_Flag_Count", "INT", "0", "FIN标志计数"),
+        ("RST_Flag_Count", "INT", "0", "RST标志计数"),
+    ]
+
+    # 批量插入 SQL (v3: 15 特征列)
     INSERT_SQL: str = """
         INSERT INTO flow_features
             (target_host, target_ip, Protocol, Flow_Duration,
              Total_Fwd_Packets, Total_Backward_Packets,
-             Fwd_Packet_Length_Max, Bwd_Packet_Length_Max)
+             Fwd_Packet_Length_Max, Bwd_Packet_Length_Max,
+             Fwd_Packet_Length_Mean, Bwd_Packet_Length_Mean,
+             Flow_Bytes_Per_Sec, Flow_Packets_Per_Sec,
+             Fwd_IAT_Mean, Bwd_IAT_Mean,
+             SYN_Flag_Count, FIN_Flag_Count, RST_Flag_Count)
         VALUES
-            (%s, %s, %s, %s, %s, %s, %s, %s);
+            (%s, %s, %s, %s, %s, %s, %s, %s,
+             %s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
 
     def __init__(self, config: DatabaseConfig) -> None:
@@ -320,10 +356,9 @@ class DatabaseManager:
     # ---- 表管理 -------------------------------------------------------------
 
     def create_table(self) -> bool:
-        """创建 flow_features 表（幂等操作）。
+        """创建 flow_features 表（幂等操作），并自动迁移新增列。
 
-        Returns:
-            True 创建成功，False 失败。
+        兼容 MySQL 5.7+ / MariaDB 10.0+，使用 DESCRIBE 检测后再 ALTER。
         """
         if not self._ensure_connection():
             return False
@@ -333,10 +368,31 @@ class DatabaseManager:
                 cursor = self._conn.cursor()
                 cursor.execute(self.CREATE_TABLE_SQL)
                 cursor.close()
-                self._logger.info("数据表 flow_features 已就绪")
+
+                # v3 迁移：检测已有列，仅添加缺失列
+                cur2 = self._conn.cursor()
+                cur2.execute("DESCRIBE flow_features")
+                existing_cols = {row[0] for row in cur2.fetchall()}
+                cur2.close()
+
+                for col_name, col_type, col_default, col_comment in self.MIGRATE_COLUMNS:
+                    if col_name not in existing_cols:
+                        try:
+                            cur3 = self._conn.cursor()
+                            cur3.execute(
+                                f"ALTER TABLE flow_features "
+                                f"ADD COLUMN {col_name} {col_type} NOT NULL DEFAULT {col_default} "
+                                f"COMMENT '{col_comment}'"
+                            )
+                            cur3.close()
+                            self._logger.info("已添加列: flow_features.%s", col_name)
+                        except Exception as e:
+                            self._logger.warning("添加列 %s 失败: %s", col_name, e)
+
+                self._logger.info("数据表 flow_features 已就绪 (v3)")
                 return True
             except Exception as e:
-                self._logger.error("创建数据表失败: %s", e)
+                self._logger.error("创建/迁移数据表失败: %s", e)
                 return False
 
     # ---- 单条写入 -----------------------------------------------------------
@@ -347,12 +403,7 @@ class DatabaseManager:
         target_host: str,
         target_ip: str,
     ) -> bool:
-        """写入单条 Flow 特征记录。
-
-        Args:
-            flow: FlowFeature 实例。
-            target_host: 目标主机名（域名或 IP）。
-            target_ip: 目标 IP 地址。
+        """写入单条 Flow 特征记录 (v3: 15 维)。
 
         Returns:
             True 写入成功，False 失败。
@@ -372,6 +423,15 @@ class DatabaseManager:
                     flow.Total_Backward_Packets,
                     flow.Fwd_Packet_Length_Max,
                     flow.Bwd_Packet_Length_Max,
+                    flow.Fwd_Packet_Length_Mean,
+                    flow.Bwd_Packet_Length_Mean,
+                    flow.Flow_Bytes_Per_Sec,
+                    flow.Flow_Packets_Per_Sec,
+                    flow.Fwd_IAT_Mean,
+                    flow.Bwd_IAT_Mean,
+                    flow.SYN_Flag_Count,
+                    flow.FIN_Flag_Count,
+                    flow.RST_Flag_Count,
                 ))
                 cursor.close()
                 return True
@@ -415,6 +475,15 @@ class DatabaseManager:
                 f.Total_Backward_Packets,
                 f.Fwd_Packet_Length_Max,
                 f.Bwd_Packet_Length_Max,
+                f.Fwd_Packet_Length_Mean,
+                f.Bwd_Packet_Length_Mean,
+                f.Flow_Bytes_Per_Sec,
+                f.Flow_Packets_Per_Sec,
+                f.Fwd_IAT_Mean,
+                f.Bwd_IAT_Mean,
+                f.SYN_Flag_Count,
+                f.FIN_Flag_Count,
+                f.RST_Flag_Count,
             )
             for f in flows
         ]

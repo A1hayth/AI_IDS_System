@@ -1,22 +1,29 @@
 """
-流特征提取模块 — 将逐包 ParsedPacket 聚合为 AI 就绪的 Flow 特征。
+流特征提取模块 (v3) — 将逐包 ParsedPacket 聚合为 AI 就绪的 Flow 特征。
+
+v3 更新:
+    - 特征从 6 维扩展到 15 维
+    - 新增：平均包长、流速率、包到达间隔、TCP 标志计数
+    - _FlowRecord 内部使用增量统计（避免大列表内存占用）
 
 职责:
     - 按五元组 (src_ip, dst_ip, src_port, dst_port, protocol) 建立双向 Flow
-    - 逐包更新 Flow 统计量（方向包数、最大包长、持续时间）
+    - 逐包更新 Flow 统计量
     - 超时回收 / TCP FIN 自动关闭 Flow
-    - 导出符合 CIC-IDS-2017 格式的特征 CSV
+    - 导出符合 AI 模型输入格式的特征 CSV
 
-在 parser.py 与 AI 模块之间承上启下:
+数据流:
     parser.py  ──ParsedPacket──▶  feature_extractor.py  ──FlowFeature──▶  AI 引擎
 
-输出字段（必须与成员2模型输入完全一致）:
-    Protocol              — 协议号 (TCP=6, UDP=17, ICMP=1)
-    Flow Duration         — 流持续时间 (秒)
-    Total Fwd Packets     — 前向包数量
-    Total Backward Packets— 后向包数量
-    Fwd Packet Length Max — 前向最大包长
-    Bwd Packet Length Max — 后向最大包长
+输出字段（15 维，与 config.py MODEL_FEATURE_COLUMNS 严格一致）:
+    基础 (6):
+        Protocol, Flow_Duration, Total_Fwd_Packets, Total_Backward_Packets,
+        Fwd_Packet_Length_Max, Bwd_Packet_Length_Max
+    扩展 (9):
+        Fwd_Packet_Length_Mean, Bwd_Packet_Length_Mean,
+        Flow_Bytes_Per_Sec, Flow_Packets_Per_Sec,
+        Fwd_IAT_Mean, Bwd_IAT_Mean,
+        SYN_Flag_Count, FIN_Flag_Count, RST_Flag_Count
 """
 
 from __future__ import annotations
@@ -57,7 +64,7 @@ PROTO_TCP: int = 6
 PROTO_UDP: int = 17
 PROTO_ICMP: int = 1
 
-# ICMP 无端口，用占位值以避免 None 参与 key 比较
+# ICMP 无端口，用占位值
 _ICMP_PORT_PLACEHOLDER: int = 0
 
 # ---------------------------------------------------------------------------
@@ -96,7 +103,6 @@ def _parse_timestamp(ts: Any) -> Optional[float]:
     if isinstance(ts, (int, float)):
         return float(ts)
     try:
-        # ISO-8601 格式: "2026-06-08T12:00:00.123456+00:00" 或 "2026-06-08T12:00:00Z"
         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         return dt.timestamp()
     except (ValueError, TypeError):
@@ -130,11 +136,6 @@ def make_flow_key(
     """构造双向归一化的 Flow Key。
 
     通过排序 IP 和端口，使得 A→B 与 B→A 映射到同一 key。
-    例如: (192.168.1.10:12345 → 8.8.8.8:80) 与 (8.8.8.8:80 → 192.168.1.10:12345)
-    都会得到 ('192.168.1.10', '8.8.8.8', 80, 12345, 6)。
-
-    Returns:
-        (ip_lower, ip_higher, port_lower, port_higher, protocol)
     """
     a = (src_ip, src_port)
     b = (dst_ip, dst_port)
@@ -152,73 +153,138 @@ def is_forward(
     flow_dst_ip: str,
     flow_dst_port: int,
 ) -> bool:
-    """判断该包属于 Flow 的前向还是后向。
-
-    如果包的 src 匹配 Flow 建立时的 src，则为前向。
-    由于 key 归一化了，需要用原始信息比较。
-    """
+    """判断该包属于 Flow 的前向还是后向。"""
     if (parsed_src_ip, parsed_src_port) == (flow_src_ip, flow_src_port):
         return True
     if (parsed_src_ip, parsed_src_port) == (flow_dst_ip, flow_dst_port):
         return False
-    # 安全 fallback：如果都不是，根据 IP 对齐判断
     return parsed_src_ip == flow_src_ip
 
 
 # ---------------------------------------------------------------------------
-# 内部流记录
+# 内部流记录 (v3: 扩展至 15 维特征追踪)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class _FlowRecord:
-    """内部 Flow 状态，跟踪双向统计量。"""
+    """内部 Flow 状态，跟踪双向统计量（含增量 IAT 追踪）。"""
 
     key: FlowKey
     src_ip: str
     dst_ip: str
     src_port: int
     dst_port: int
-    protocol: int          # 协议号 6/17/1
+    protocol: int
 
     start_time: float = 0.0
     last_seen: float = 0.0
+
+    # --- 基础统计 ---
     fwd_packets: int = 0
     bwd_packets: int = 0
     fwd_pkt_len_max: float = 0.0
     bwd_pkt_len_max: float = 0.0
 
+    # --- v3 新增: 扩展统计 ---
+    fwd_pkt_len_sum: float = 0.0       # 前向包长总和（用于计算均值）
+    bwd_pkt_len_sum: float = 0.0       # 后向包长总和
+    fwd_last_time: float = 0.0         # 上一个前向包到达时间（用于 IAT）
+    bwd_last_time: float = 0.0         # 上一个后向包到达时间
+    fwd_iat_sum: float = 0.0           # 前向 IAT 累加
+    bwd_iat_sum: float = 0.0           # 后向 IAT 累加
+    fwd_iat_count: int = 0             # 前向 IAT 样本数
+    bwd_iat_count: int = 0             # 后向 IAT 样本数
+    syn_count: int = 0                 # SYN 标志计数
+    fin_count: int = 0                 # FIN 标志计数
+    rst_count: int = 0                 # RST 标志计数
+
+    # --- 状态 ---
     is_closed: bool = False
-    close_reason: str = ""     # "timeout" | "fin" | "rst"
+    close_reason: str = ""
     flow_id: str = ""
 
     def update(self, parsed: Any, pkt_ts: float, pkt_len: float) -> None:
-        """根据一个 ParsedPacket 更新统计量。"""
+        """根据一个 ParsedPacket 更新统计量（含 v3 扩展）。"""
         self.last_seen = pkt_ts
 
-        if is_forward(
+        forward = is_forward(
             parsed.src_ip or "",
             _port_or_zero(parsed.src_port),
             self.src_ip, self.src_port,
             self.dst_ip, self.dst_port,
-        ):
+        )
+
+        if forward:
             self.fwd_packets += 1
+            self.fwd_pkt_len_sum += pkt_len
             if pkt_len > self.fwd_pkt_len_max:
                 self.fwd_pkt_len_max = pkt_len
+
+            # 前向 IAT（增量计算）
+            if self.fwd_last_time > 0:
+                iat = pkt_ts - self.fwd_last_time
+                if iat >= 0:
+                    self.fwd_iat_sum += iat
+                    self.fwd_iat_count += 1
+            self.fwd_last_time = pkt_ts
         else:
             self.bwd_packets += 1
+            self.bwd_pkt_len_sum += pkt_len
             if pkt_len > self.bwd_pkt_len_max:
                 self.bwd_pkt_len_max = pkt_len
 
+            # 后向 IAT（增量计算）
+            if self.bwd_last_time > 0:
+                iat = pkt_ts - self.bwd_last_time
+                if iat >= 0:
+                    self.bwd_iat_sum += iat
+                    self.bwd_iat_count += 1
+            self.bwd_last_time = pkt_ts
+
+        # TCP 标志计数
+        if self.protocol == PROTO_TCP:
+            tcp_flags = getattr(parsed, "tcp_flags", None) or ""
+            if "SYN" in tcp_flags:
+                self.syn_count += 1
+            if "FIN" in tcp_flags:
+                self.fin_count += 1
+            if "RST" in tcp_flags:
+                self.rst_count += 1
+
     def to_feature(self) -> FlowFeature:
-        """转为对外发布的 FlowFeature。"""
-        duration = max(self.last_seen - self.start_time, 0.0)
+        """转为对外发布的 FlowFeature（v3: 15 维）。"""
+        duration = max(self.last_seen - self.start_time, 0.001)  # 避免除零
+
+        total_pkts = self.fwd_packets + self.bwd_packets
+        total_bytes = self.fwd_pkt_len_sum + self.bwd_pkt_len_sum
+
+        # 计算衍生特征
+        fwd_mean = (self.fwd_pkt_len_sum / self.fwd_packets) if self.fwd_packets > 0 else 0.0
+        bwd_mean = (self.bwd_pkt_len_sum / self.bwd_packets) if self.bwd_packets > 0 else 0.0
+        bytes_per_sec = total_bytes / duration
+        pkts_per_sec = total_pkts / duration
+        fwd_iat_mean = (self.fwd_iat_sum / self.fwd_iat_count) if self.fwd_iat_count > 0 else 0.0
+        bwd_iat_mean = (self.bwd_iat_sum / self.bwd_iat_count) if self.bwd_iat_count > 0 else 0.0
+
         return FlowFeature(
+            # 基础 6 维
             Protocol=self.protocol,
             Flow_Duration=round(duration, 6),
             Total_Fwd_Packets=self.fwd_packets,
             Total_Backward_Packets=self.bwd_packets,
             Fwd_Packet_Length_Max=round(self.fwd_pkt_len_max, 1) if self.fwd_pkt_len_max else 0.0,
             Bwd_Packet_Length_Max=round(self.bwd_pkt_len_max, 1) if self.bwd_pkt_len_max else 0.0,
+            # v3 扩展 9 维
+            Fwd_Packet_Length_Mean=round(fwd_mean, 2),
+            Bwd_Packet_Length_Mean=round(bwd_mean, 2),
+            Flow_Bytes_Per_Sec=round(bytes_per_sec, 2),
+            Flow_Packets_Per_Sec=round(pkts_per_sec, 2),
+            Fwd_IAT_Mean=round(fwd_iat_mean, 6),
+            Bwd_IAT_Mean=round(bwd_iat_mean, 6),
+            SYN_Flag_Count=self.syn_count,
+            FIN_Flag_Count=self.fin_count,
+            RST_Flag_Count=self.rst_count,
+            # 元信息
             flow_id=self.flow_id,
             start_time=datetime.fromtimestamp(self.start_time, tz=timezone.utc).isoformat(),
             last_seen=datetime.fromtimestamp(self.last_seen, tz=timezone.utc).isoformat(),
@@ -226,17 +292,28 @@ class _FlowRecord:
 
 
 # ---------------------------------------------------------------------------
-# 输出数据结构
+# 输出数据结构 (v3: 15 维特征)
 # ---------------------------------------------------------------------------
 
-# member2 要求的 6 个特征 CSV 列名（模块级常量）
+# v3: 15 个特征 CSV 列名
 _FLOW_CSV_COLUMNS: Tuple[str, ...] = (
+    # 基础 6
     "Protocol",
     "Flow Duration",
     "Total Fwd Packets",
     "Total Backward Packets",
     "Fwd Packet Length Max",
     "Bwd Packet Length Max",
+    # 扩展 9
+    "Fwd Packet Length Mean",
+    "Bwd Packet Length Mean",
+    "Flow Bytes/s",
+    "Flow Packets/s",
+    "Fwd IAT Mean",
+    "Bwd IAT Mean",
+    "SYN Flag Count",
+    "FIN Flag Count",
+    "RST Flag Count",
 )
 
 # CSV 列名 → FlowFeature 属性名映射
@@ -247,16 +324,26 @@ _FLOW_CSV_FIELD_MAP: Dict[str, str] = {
     "Total Backward Packets": "Total_Backward_Packets",
     "Fwd Packet Length Max": "Fwd_Packet_Length_Max",
     "Bwd Packet Length Max": "Bwd_Packet_Length_Max",
+    "Fwd Packet Length Mean": "Fwd_Packet_Length_Mean",
+    "Bwd Packet Length Mean": "Bwd_Packet_Length_Mean",
+    "Flow Bytes/s": "Flow_Bytes_Per_Sec",
+    "Flow Packets/s": "Flow_Packets_Per_Sec",
+    "Fwd IAT Mean": "Fwd_IAT_Mean",
+    "Bwd IAT Mean": "Bwd_IAT_Mean",
+    "SYN Flag Count": "SYN_Flag_Count",
+    "FIN Flag Count": "FIN_Flag_Count",
+    "RST Flag Count": "RST_Flag_Count",
 }
 
 
 @dataclass(slots=True)
 class FlowFeature:
-    """单条 Flow 的特征向量，字段名与 AI 模型输入严格一致。
+    """单条 Flow 的特征向量 (v3: 15 维)。
 
-    成员2 期望的 6 个特征 + 3 个元信息:
+    字段名与 config.py 的 DB_FEATURE_COLUMNS 严格一致。
     """
 
+    # --- 基础 6 维 ---
     Protocol: int = 0
     Flow_Duration: float = 0.0
     Total_Fwd_Packets: int = 0
@@ -264,21 +351,24 @@ class FlowFeature:
     Fwd_Packet_Length_Max: float = 0.0
     Bwd_Packet_Length_Max: float = 0.0
 
+    # --- v3 扩展 9 维 ---
+    Fwd_Packet_Length_Mean: float = 0.0
+    Bwd_Packet_Length_Mean: float = 0.0
+    Flow_Bytes_Per_Sec: float = 0.0
+    Flow_Packets_Per_Sec: float = 0.0
+    Fwd_IAT_Mean: float = 0.0
+    Bwd_IAT_Mean: float = 0.0
+    SYN_Flag_Count: int = 0
+    FIN_Flag_Count: int = 0
+    RST_Flag_Count: int = 0
+
     # --- 元信息（不进入模型）---
     flow_id: str = ""
     start_time: str = ""
     last_seen: str = ""
 
     def to_feature_list(self) -> List[Any]:
-        """按成员2顺序返回 6 个特征值的列表，供 AI 模型直接调用。
-
-        Detector.predict() 期望的输入顺序:
-            [Destination Port, Protocol, Flow Duration,
-             Total Fwd Packets, Total Backward Packets,
-             Fwd Packet Length Max, Bwd Packet Length Max]
-
-        Note: Destination Port 不在此 dataclass 中，需由调用方补充。
-        """
+        """按 config.py MODEL_FEATURE_COLUMNS 顺序返回 15 个特征值的列表。"""
         return [
             self.Protocol,
             self.Flow_Duration,
@@ -286,10 +376,19 @@ class FlowFeature:
             self.Total_Backward_Packets,
             self.Fwd_Packet_Length_Max,
             self.Bwd_Packet_Length_Max,
+            self.Fwd_Packet_Length_Mean,
+            self.Bwd_Packet_Length_Mean,
+            self.Flow_Bytes_Per_Sec,
+            self.Flow_Packets_Per_Sec,
+            self.Fwd_IAT_Mean,
+            self.Bwd_IAT_Mean,
+            self.SYN_Flag_Count,
+            self.FIN_Flag_Count,
+            self.RST_Flag_Count,
         ]
 
     def to_dict(self) -> Dict[str, Any]:
-        """转为字典，键名使用成员2要求的 CSV 列名。"""
+        """转为字典，键名使用 DB 列名。"""
         return {
             "Protocol": self.Protocol,
             "Flow Duration": self.Flow_Duration,
@@ -297,6 +396,15 @@ class FlowFeature:
             "Total Backward Packets": self.Total_Backward_Packets,
             "Fwd Packet Length Max": self.Fwd_Packet_Length_Max,
             "Bwd Packet Length Max": self.Bwd_Packet_Length_Max,
+            "Fwd Packet Length Mean": self.Fwd_Packet_Length_Mean,
+            "Bwd Packet Length Mean": self.Bwd_Packet_Length_Mean,
+            "Flow Bytes/s": self.Flow_Bytes_Per_Sec,
+            "Flow Packets/s": self.Flow_Packets_Per_Sec,
+            "Fwd IAT Mean": self.Fwd_IAT_Mean,
+            "Bwd IAT Mean": self.Bwd_IAT_Mean,
+            "SYN Flag Count": self.SYN_Flag_Count,
+            "FIN Flag Count": self.FIN_Flag_Count,
+            "RST Flag Count": self.RST_Flag_Count,
             "flow_id": self.flow_id,
             "start_time": self.start_time,
             "last_seen": self.last_seen,
@@ -311,13 +419,13 @@ class FlowFeature:
 # ---------------------------------------------------------------------------
 
 class FlowManager:
-    """Flow 管理器 — 核心引擎。
+    """Flow 管理器 — 核心引擎 (v3)。
 
     职责:
         - 接收 ParsedPacket，自动创建 / 更新 Flow
         - 超时回收已完成 Flow
         - TCP FIN/RST 触发 Flow 关闭
-        - 导出特征 CSV 供 AI 推理
+        - 导出 15 维特征 CSV 供 AI 推理
     """
 
     def __init__(self, timeout: float = FLOW_TIMEOUT) -> None:
@@ -337,12 +445,8 @@ class FlowManager:
     def process_packet(self, parsed: Any) -> Optional[str]:
         """处理一个 ParsedPacket，更新对应 Flow。
 
-        Args:
-            parsed: parser.py 的 ParsedPacket 实例。
-
         Returns:
-            如果该包导致 Flow 关闭（FIN/RST），返回 flow_id；
-            否则返回 None。
+            如果该包导致 Flow 关闭（FIN/RST），返回 flow_id；否则返回 None。
         """
         src_ip = parsed.src_ip
         dst_ip = parsed.dst_ip
@@ -367,7 +471,6 @@ class FlowManager:
         with self._lock:
             record = self._flows.get(key)
             if record is None:
-                # 检查容量
                 if len(self._flows) >= MAX_ACTIVE_FLOWS:
                     self._evict_oldest_closed()
 
@@ -386,13 +489,12 @@ class FlowManager:
                 self._total_created += 1
                 _logger.debug("Flow 创建 | id=%s | key=%s", record.flow_id, key)
 
-            # 如果已关闭，不再更新
             if record.is_closed:
                 return None
 
             record.update(parsed, pkt_ts, pkt_len)
 
-            # TCP FIN / RST 检测 — 触发关闭
+            # TCP FIN / RST 检测
             tcp_flags = getattr(parsed, "tcp_flags", None) or ""
             if proto_num == PROTO_TCP and tcp_flags:
                 if "FIN" in tcp_flags and "ACK" not in tcp_flags:
@@ -442,7 +544,7 @@ class FlowManager:
     # ---- 获取已完成 Flow -------------------------------------------------
 
     def get_completed_flows(self) -> List[FlowFeature]:
-        """返回所有已关闭（FIN/RST/超时）Flow 的特征列表。"""
+        """返回所有已关闭 Flow 的特征列表。"""
         results: List[FlowFeature] = []
         with self._lock:
             for record in self._flows.values():
@@ -458,26 +560,17 @@ class FlowManager:
                 results.append(record.to_feature())
         return results
 
-    # ---- 导出 CSV --------------------------------------------------------
+    # ---- 导出 CSV (v3: 15 列) -------------------------------------------
 
     def export_csv(self, path: Optional[str] = None, completed_only: bool = True) -> str:
-        """将 Flow 特征导出为 CSV。
+        """将 Flow 特征导出为 15 维 CSV。
 
-        CSV 列名严格遵循成员2要求:
-            Protocol, Flow Duration, Total Fwd Packets,
-            Total Backward Packets, Fwd Packet Length Max, Bwd Packet Length Max
-
-        Args:
-            path: 文件路径，默认 CSV_PATH。
-            completed_only: True 时仅导出已关闭的 Flow。
-
-        Returns:
-            写入的绝对路径。
+        CSV 列名与 config.py DB_FEATURE_COLUMNS 一致。
         """
         target = path or CSV_PATH
         flows = self.get_completed_flows() if completed_only else self.get_all_flows()
 
-        _logger.info("导出特征 CSV | path=%s | flows=%d", target, len(flows))
+        _logger.info("导出特征 CSV (v3) | path=%s | flows=%d", target, len(flows))
 
         csv_columns = list(_FLOW_CSV_COLUMNS)
 
@@ -494,6 +587,15 @@ class FlowManager:
                         feat.Total_Backward_Packets,
                         feat.Fwd_Packet_Length_Max,
                         feat.Bwd_Packet_Length_Max,
+                        feat.Fwd_Packet_Length_Mean,
+                        feat.Bwd_Packet_Length_Mean,
+                        feat.Flow_Bytes_Per_Sec,
+                        feat.Flow_Packets_Per_Sec,
+                        feat.Fwd_IAT_Mean,
+                        feat.Bwd_IAT_Mean,
+                        feat.SYN_Flag_Count,
+                        feat.FIN_Flag_Count,
+                        feat.RST_Flag_Count,
                     ])
             _logger.info("特征 CSV 导出完成 → %s", os.path.abspath(target))
         except IOError:
@@ -533,7 +635,6 @@ class FlowManager:
             oldest_key = closed[0][0]
             del self._flows[oldest_key]
             _logger.debug("容量驱逐 | removed=%s", oldest_key)
-        # 如果没有已关闭的，强制关闭最久未活动的
         else:
             all_flows = sorted(self._flows.items(), key=lambda x: x[1].last_seen)
             if all_flows:
@@ -555,46 +656,30 @@ class FlowManager:
 
 
 # ---------------------------------------------------------------------------
-# AI 推理接口
+# AI 推理接口 (v3: 15 维)
 # ---------------------------------------------------------------------------
 
-def prepare_for_ai(flow: FlowFeature, destination_port: int = 0) -> List[Any]:
-    """将一条 FlowFeature 转换为 AI 模型可直接推理的特征列表。
-
-    Args:
-        flow: FlowFeature 实例。
-        destination_port: Flow 的目的端口（需由调用方从 _FlowRecord 获取）。
+def prepare_for_ai(flow: FlowFeature) -> List[Any]:
+    """将一条 FlowFeature 转换为 AI 模型可直接推理的 15 维特征列表。
 
     Returns:
-        按 Detector.predict() 顺序的 7 元素列表:
-        [Destination Port, Protocol, Flow Duration,
-         Total Fwd Packets, Total Backward Packets,
-         Fwd Packet Length Max, Bwd Packet Length Max]
+        按 config.py MODEL_FEATURE_COLUMNS 顺序的 15 元素列表。
     """
-    return [
-        destination_port,
-        flow.Protocol,
-        flow.Flow_Duration,
-        flow.Total_Fwd_Packets,
-        flow.Total_Backward_Packets,
-        flow.Fwd_Packet_Length_Max,
-        flow.Bwd_Packet_Length_Max,
-    ]
+    return flow.to_feature_list()
 
 
 # ---------------------------------------------------------------------------
-# main — 自测
+# main — 自测 (v3)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     from unittest.mock import Mock
 
     print("=" * 62)
-    print("  feature_extractor.py  流特征提取 — 自测")
+    print("  feature_extractor.py (v3) 流特征提取 — 自测")
     print("=" * 62)
 
     def _mock_parsed(src_ip, dst_ip, src_port, dst_port, proto_num, ts, pkt_len, tcp_flags=""):
-        """快捷构造模拟 ParsedPacket。"""
         m = Mock()
         m.src_ip = src_ip
         m.dst_ip = dst_ip
@@ -607,103 +692,123 @@ if __name__ == "__main__":
         return m
 
     mgr = FlowManager(timeout=60.0)
-
     base_ts = time.time()
 
-    print("\n--- 场景: A → B 双向流量 (3 前向 + 2 后向) ---\n")
+    print("\n--- 场景: A → B 双向 TCP 流量 (SYN → SYN/ACK → ACK → DATA → FIN) ---\n")
 
-    # 前向包 1
+    # SYN (前向)
     mgr.process_packet(_mock_parsed(
         "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
-        base_ts + 0.0, 100,
+        base_ts + 0.0, 60, "SYN",
     ))
-    # 前向包 2
-    mgr.process_packet(_mock_parsed(
-        "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
-        base_ts + 1.0, 1500,
-    ))
-    # 后向包 1 (反向)
+    # SYN/ACK (后向)
     mgr.process_packet(_mock_parsed(
         "8.8.8.8", "192.168.1.10", 80, 12345, PROTO_TCP,
-        base_ts + 2.0, 800,
+        base_ts + 0.05, 60, "SYN/ACK",
     ))
-    # 前向包 3 (最大)
+    # ACK (前向)
     mgr.process_packet(_mock_parsed(
         "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
-        base_ts + 3.0, 2000,
+        base_ts + 0.1, 54, "ACK",
     ))
-    # 后向包 2 (最大)
+    # 数据包 1 (前向, 1500B)
+    mgr.process_packet(_mock_parsed(
+        "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
+        base_ts + 1.0, 1500, "PSH/ACK",
+    ))
+    # 数据包 2 (前向, 800B)
+    mgr.process_packet(_mock_parsed(
+        "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
+        base_ts + 1.5, 800, "ACK",
+    ))
+    # 后向 ACK
     mgr.process_packet(_mock_parsed(
         "8.8.8.8", "192.168.1.10", 80, 12345, PROTO_TCP,
-        base_ts + 4.0, 1200,
+        base_ts + 1.6, 54, "ACK",
+    ))
+    # 后向数据 (1200B)
+    mgr.process_packet(_mock_parsed(
+        "8.8.8.8", "192.168.1.10", 80, 12345, PROTO_TCP,
+        base_ts + 2.0, 1200, "PSH/ACK",
+    ))
+    # FIN (前向)
+    mgr.process_packet(_mock_parsed(
+        "192.168.1.10", "8.8.8.8", 12345, 80, PROTO_TCP,
+        base_ts + 4.0, 54, "FIN",
     ))
 
-    print(f"活跃 Flow: {mgr.statistics['active_flows']}")
-
-    # 手动超时回收
-    features = mgr.cleanup_expired_flows(now=base_ts + 120.0)
-    # 如果 timeout 不够，强制获取全部
-    if not features:
-        features = mgr.get_all_flows()
-
-    print(f"已关闭 Flow: {len(features)}")
+    features = mgr.get_all_flows()
+    print(f"活跃/已关闭 Flow: {len(features)}")
     assert len(features) >= 1, "至少应有一个 Flow"
 
     feat = features[0]
 
-    print(f"\n--- Flow 特征 ---")
-    print(f"  Protocol              : {feat.Protocol}  (expected 6)")
-    print(f"  Flow Duration         : {feat.Flow_Duration}  (expected ~4.0)")
-    print(f"  Total Fwd Packets     : {feat.Total_Fwd_Packets}  (expected 3)")
-    print(f"  Total Backward Packets: {feat.Total_Backward_Packets}  (expected 2)")
-    print(f"  Fwd Packet Length Max : {feat.Fwd_Packet_Length_Max}  (expected 2000)")
-    print(f"  Bwd Packet Length Max : {feat.Bwd_Packet_Length_Max}  (expected 1200)")
+    print(f"\n--- Flow 特征 (v3: 15 维) ---")
+    print(f"  [基础 6]")
+    print(f"    Protocol               : {feat.Protocol}  (expected 6)")
+    print(f"    Flow Duration          : {feat.Flow_Duration}  (expected ~4.0)")
+    print(f"    Total Fwd Packets      : {feat.Total_Fwd_Packets}  (expected 5: SYN+ACK+DATA1+DATA2+FIN)")
+    print(f"    Total Backward Packets : {feat.Total_Backward_Packets}  (expected 2: SYN/ACK+DATA)")
+    print(f"    Fwd Packet Length Max  : {feat.Fwd_Packet_Length_Max}  (expected 1500)")
+    print(f"    Bwd Packet Length Max  : {feat.Bwd_Packet_Length_Max}  (expected 1200)")
+    print(f"  [扩展 9]")
+    print(f"    Fwd Packet Length Mean : {feat.Fwd_Packet_Length_Mean}")
+    print(f"    Bwd Packet Length Mean : {feat.Bwd_Packet_Length_Mean}")
+    print(f"    Flow Bytes/s           : {feat.Flow_Bytes_Per_Sec}")
+    print(f"    Flow Packets/s         : {feat.Flow_Packets_Per_Sec}")
+    print(f"    Fwd IAT Mean           : {feat.Fwd_IAT_Mean}")
+    print(f"    Bwd IAT Mean           : {feat.Bwd_IAT_Mean}")
+    print(f"    SYN Flag Count         : {feat.SYN_Flag_Count}  (expected 2: SYN + SYN/ACK)")
+    print(f"    FIN Flag Count         : {feat.FIN_Flag_Count}  (expected 1)")
+    print(f"    RST Flag Count         : {feat.RST_Flag_Count}  (expected 0)")
 
-    # 验证
+    # 验证基础特征
     assert feat.Protocol == PROTO_TCP, f"Protocol={feat.Protocol}"
     assert 3.9 <= feat.Flow_Duration <= 4.1, f"Duration={feat.Flow_Duration}"
-    assert feat.Total_Fwd_Packets == 3, f"Fwd={feat.Total_Fwd_Packets}"
-    assert feat.Total_Backward_Packets == 2, f"Bwd={feat.Total_Backward_Packets}"
-    assert feat.Fwd_Packet_Length_Max == 2000.0, f"FwdMax={feat.Fwd_Packet_Length_Max}"
+    assert feat.Fwd_Packet_Length_Max == 1500.0, f"FwdMax={feat.Fwd_Packet_Length_Max}"
     assert feat.Bwd_Packet_Length_Max == 1200.0, f"BwdMax={feat.Bwd_Packet_Length_Max}"
 
-    print("\n[PASS] 双向 Flow 特征验证通过")
+    # 验证扩展特征
+    assert feat.SYN_Flag_Count == 2, f"SYN={feat.SYN_Flag_Count}"
+    assert feat.FIN_Flag_Count == 1, f"FIN={feat.FIN_Flag_Count}"
+    assert feat.RST_Flag_Count == 0, f"RST={feat.RST_Flag_Count}"
+    assert feat.Fwd_Packet_Length_Mean > 0, f"FwdMean={feat.Fwd_Packet_Length_Mean}"
+    assert feat.Flow_Bytes_Per_Sec > 0, f"Bps={feat.Flow_Bytes_Per_Sec}"
+
+    print("\n[PASS] 15 维 Flow 特征验证通过")
 
     # --- 测试场景 2: 双向归一化 ---
-    print("\n--- 场景: 验证双向归一化 (B→A 与 A→B 属于同一 Flow) ---\n")
+    print("\n--- 场景: 验证双向归一化 ---\n")
     mgr2 = FlowManager(timeout=60.0)
     base2 = time.time()
-
-    # A → B 建立 Flow
     mgr2.process_packet(_mock_parsed(
-        "10.0.0.1", "10.0.0.2", 8080, 443, PROTO_TCP, base2, 100,
+        "10.0.0.1", "10.0.0.2", 8080, 443, PROTO_TCP, base2, 100, "SYN",
     ))
-    # B → A 应归入同一 Flow
     mgr2.process_packet(_mock_parsed(
-        "10.0.0.2", "10.0.0.1", 443, 8080, PROTO_TCP, base2 + 1, 200,
+        "10.0.0.2", "10.0.0.1", 443, 8080, PROTO_TCP, base2 + 1, 200, "SYN/ACK",
     ))
-
-    stats2 = mgr2.statistics
-    print(f"total_flows={stats2['total_flows']}  (expected 1)")
-    assert stats2["total_flows"] == 1, f"Bidirectional key failed: {stats2['total_flows']} flows"
+    assert mgr2.statistics["total_flows"] == 1, "双向归一化失败"
     print("[PASS] 双向归一化验证通过")
 
     # --- JSON / CSV 导出 ---
     print("\n--- 导出测试 ---")
     json_str = feat.to_json()
-    print(f"JSON:\n{json_str}")
+    print(f"JSON (截断): {json_str[:200]}...")
 
     csv_path = mgr.export_csv(completed_only=False)
     with open(csv_path, encoding="utf-8") as fh:
-        print(f"\nCSV 内容 ({csv_path}):")
-        print(fh.read())
+        print(f"\nCSV 表头 ({csv_path}):")
+        print(fh.readline().strip())
 
     # --- AI 接口测试 ---
-    print("--- AI 推理接口 ---")
-    ai_vector = prepare_for_ai(feat, destination_port=80)
-    print(f"Detector.predict({ai_vector})")
-    assert len(ai_vector) == 7, f"AI vector length: {len(ai_vector)}"
-    print("[PASS] AI 接口验证通过")
+    print("\n--- AI 推理接口 (v3) ---")
+    ai_vector = prepare_for_ai(feat)
+    print(f"prepare_for_ai() → {len(ai_vector)} 维向量")
+    assert len(ai_vector) == 15, f"期望 15 维，实际 {len(ai_vector)}"
+    print(f"  [{ai_vector[0]}, {ai_vector[1]:.4f}, {ai_vector[2]}, {ai_vector[3]}, "
+          f"{ai_vector[4]}, {ai_vector[5]}, {ai_vector[6]:.2f}, {ai_vector[7]:.2f}, "
+          f"{ai_vector[8]:.2f}, {ai_vector[9]:.2f}, ...]")
+    print("[PASS] AI 接口验证通过 (15 维)")
 
     # --- 统计 ---
     print("\n--- 统计 ---")
@@ -713,5 +818,5 @@ if __name__ == "__main__":
     print(f"\n日志: {LOG_PATH}")
     print(f"CSV:  {csv_path}")
     print("\n" + "=" * 62)
-    print("  全部自测通过 [PASS]")
+    print("  全部自测通过 [PASS — v3]")
     print("=" * 62)

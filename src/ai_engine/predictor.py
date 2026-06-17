@@ -258,29 +258,49 @@ class Detector:
     # ==================================================================
 
     def _heuristic_predict(self, raw_features):
-        """基于规则的启发式检测（模型未加载时的降级方案）。"""
-        # 提取特征值
+        """基于规则的启发式检测（模型未加载时的降级方案，v3: 15 维）。"""
+        # 提取特征值（兼容 DataFrame / array 输入）
         if isinstance(raw_features, pd.DataFrame):
             row = raw_features.iloc[0]
+            proto = int(row.get('protocol', row.get('Protocol', 6)))
             flow_dur = float(row.get('flow_duration', row.get('Flow_Duration', 0)))
             fwd_pkts = int(row.get('total_fwd_packets', row.get('Total_Fwd_Packets', 0)))
             bwd_pkts = int(row.get('total_backward_packets', row.get('Total_Backward_Packets', 0)))
             fwd_max = float(row.get('fwd_packet_length_max', row.get('Fwd_Packet_Length_Max', 0)))
             bwd_max = float(row.get('bwd_packet_length_max', row.get('Bwd_Packet_Length_Max', 0)))
-            proto = int(row.get('protocol', row.get('Protocol', 6)))
+            # v3 新增特征
+            bytes_ps = float(row.get('flow_bytes_per_sec', row.get('Flow_Bytes_Per_Sec', 0)))
+            syn_cnt = int(row.get('syn_flag_count', row.get('SYN_Flag_Count', 0)))
+            rst_cnt = int(row.get('rst_flag_count', row.get('RST_Flag_Count', 0)))
+            fwd_iat = float(row.get('fwd_iat_mean', row.get('Fwd_IAT_Mean', 0)))
         else:
             flat = np.array(raw_features).flatten()
             proto, flow_dur, fwd_pkts, bwd_pkts, fwd_max, bwd_max = (
                 flat[0], flat[1], flat[2], flat[3], flat[4], flat[5]
             )
+            # v3 新增特征（索引 6-14）
+            fwd_mean = flat[6] if len(flat) > 6 else 0
+            bwd_mean = flat[7] if len(flat) > 7 else 0
+            bytes_ps = flat[8] if len(flat) > 8 else 0
+            pkts_ps = flat[9] if len(flat) > 9 else 0
+            fwd_iat = flat[10] if len(flat) > 10 else 0
+            bwd_iat = flat[11] if len(flat) > 11 else 0
+            syn_cnt = int(flat[12]) if len(flat) > 12 else 0
+            fin_cnt = int(flat[13]) if len(flat) > 13 else 0
+            rst_cnt = int(flat[14]) if len(flat) > 14 else 0
 
+        # 基于扩展特征的启发式规则
         if flow_dur > 10000000 and fwd_pkts > 500 and fwd_max > 1200:
             return "DoS Hulk", 0.95
         elif flow_dur > 5000000 and fwd_pkts < 10 and bwd_max == 0 and proto == 6:
             return "DoS slowloris", 0.92
-        elif fwd_pkts > 1000 and bwd_max > 500:
+        elif fwd_pkts > 1000 and bwd_max > 500 and bytes_ps > 100000:
             return "DDoS", 0.97
         elif flow_dur < 500 and fwd_pkts < 3 and fwd_max == 0 and proto == 6:
             return "PortScan", 0.88
+        elif syn_cnt > 100 and rst_cnt > 10:
+            return "PortScan", 0.85
+        elif fwd_iat < 0.001 and fwd_pkts > 100:
+            return "DoS Hulk", 0.90
         else:
             return "Normal", 0.99
