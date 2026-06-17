@@ -1,0 +1,36 @@
+{
+  "model_feature_columns": [
+    "protocol",
+    "flow_duration",
+    "total_fwd_packets",
+    "total_backward_packets",
+    "fwd_packet_length_max",
+    "bwd_packet_length_max"
+  ],
+  "db_feature_columns": [
+    "Protocol",
+    "Flow_Duration",
+    "Total_Fwd_Packets",
+    "Total_Backward_Packets",
+    "Fwd_Packet_Length_Max",
+    "Bwd_Packet_Length_Max"
+  ],
+  "feature_count": 6,
+  "num_classes": 14,
+  "classes": [
+    "Benign",
+    "Bot",
+    "DDoS",
+    "DoS GoldenEye",
+    "DoS Hulk",
+    "DoS Slowhttptest",
+    "DoS slowloris",
+    "FTP-Patator",
+    "Infiltration",
+    "PortScan",
+    "SSH-Patator",
+    "Web Attack � Brute Force",
+    "Web Attack � Sql Injection",
+    "Web Attack � XSS"
+  ]
+}

@@ -57,6 +57,11 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from src.ai_engine.predictor import Detector
+from config import (
+    DB_FEATURE_COLUMNS, MODEL_FEATURE_COLUMNS,
+    DB_TO_MODEL_COLUMN_MAP,
+    MIN_CONFIDENCE_THRESHOLD, LOW_CONFIDENCE_WARNING,
+)
 
 # ============================================================================
 # 数据库配置（与 web/backend/config.py、traffic_monitor.py 保持一致）
@@ -76,16 +81,12 @@ DB_CONFIG = {
 }
 
 # ============================================================================
-# 6 个模型特征（必须与 preprocess.py SELECTED_FEATURES 严格对齐）
+# 特征列名映射（MySQL Mixed_Case → 模型 lowercase）
 # ============================================================================
-FEATURE_COLUMNS = [
-    "protocol",
-    "flow_duration",
-    "total_fwd_packets",
-    "total_backward_packets",
-    "fwd_packet_length_max",
-    "bwd_packet_length_max",
-]
+# MySQL 实际列名（Mixed_Case，与 traffic_monitor.py 建表语句一致）
+DB_COLUMN_NAMES = list(DB_FEATURE_COLUMNS)
+# 模型内部列名（lowercase，与 train.py / predictor.py 一致）
+FEATURE_COLUMNS = list(MODEL_FEATURE_COLUMNS)
 
 # ============================================================================
 # 日志系统
@@ -397,25 +398,39 @@ class PipelineService:
             for row in rows:
                 row_id = row["id"]
 
-                # 提取 6 维特征向量
+                # 提取 6 维特征向量（兼容 MySQL Mixed_Case 和 lowercase 列名）
                 try:
-                    feature_vector = [row[col] for col in FEATURE_COLUMNS]
-                except KeyError as e:
+                    feature_vector = []
+                    for i, col in enumerate(FEATURE_COLUMNS):
+                        # 优先尝试 lowercase 模型列名，再回退 Mixed_Case DB列名
+                        if col in row:
+                            feature_vector.append(row[col])
+                        else:
+                            db_col = DB_COLUMN_NAMES[i]
+                            feature_vector.append(row[db_col])
+                except (KeyError, IndexError) as e:
                     self._logger.warning(
                         "Flow ID=%d 缺少特征列 %s，跳过", row_id, e
                     )
                     continue
 
-                # AI 预测（含置信度）
+                # AI 预测（含置信度）— 使用 predict_with_details 获取更多信息
                 try:
-                    attack_type, confidence = self._detector.predict_proba(
-                        feature_vector
-                    )
+                    attack_type, confidence, top3, is_low_conf = \
+                        self._detector.predict_with_details(feature_vector)
                 except Exception as e:
                     self._logger.error(
                         "Flow ID=%d 模型预测失败: %s", row_id, e
                     )
                     continue
+
+                # 低置信度告警
+                if is_low_conf:
+                    self._logger.warning(
+                        "Flow ID=%d 置信度偏低 (%.4f) — top3: %s",
+                        row_id, confidence,
+                        [(t, f"{p:.4f}") for t, p in top3],
+                    )
 
                 # 清洗标签
                 if str(attack_type).upper() in ("BENIGN", "NORMAL"):
