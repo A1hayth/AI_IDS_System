@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "description": "AI-IDS 正则特征匹配引擎 — 签名规则库",
+  "updated": "2026-06-18",
+  "rules": [
+  ],
+  "instructions": "在此文件中添加自定义规则。格式参见内置规则示例:",
+  "rule_template": {
+    "id": "CUSTOM-001",
+    "name": "规则名称",
+    "type": "攻击类型",
+    "severity": "HIGH",
+    "patterns": ["regex1", "regex2"],
+    "description": "规则描述",
+    "target_fields": ["uri", "body", "payload", "user_agent"]
+  }
+}

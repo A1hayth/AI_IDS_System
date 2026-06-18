@@ -61,6 +61,7 @@ from config import (
     DB_FEATURE_COLUMNS, MODEL_FEATURE_COLUMNS,
     DB_TO_MODEL_COLUMN_MAP,
     MIN_CONFIDENCE_THRESHOLD, LOW_CONFIDENCE_WARNING,
+    REGEX_DETECTOR_CONFIG,
 )
 
 # ============================================================================
@@ -234,21 +235,29 @@ class PipelineService:
         "\n"
         "╔══════════════════════════════════════════════════════════════╗\n"
         "║         AI-IDS  智能检测服务  Pipeline Service              ║\n"
-        "║         flow_features  →  XGBoost  →  traffic_logs         ║\n"
+        "║         flow_features  →  XGBoost + Regex  →  traffic_logs  ║\n"
         "╚══════════════════════════════════════════════════════════════╝"
     )
 
     SEPARATOR: str = "=" * 60
 
-    def __init__(self, poll_interval: float = 60.0) -> None:
+    def __init__(
+        self,
+        poll_interval: float = 60.0,
+        regex_detector=None,
+        enable_regex: bool = True,
+    ) -> None:
         self._poll_interval: float = max(1.0, poll_interval)
         self._logger: logging.Logger = _setup_logging()
         self._detector: Detector | None = None
+        self._regex_detector = regex_detector  # 正则引擎实例
+        self._enable_regex: bool = enable_regex
         self._running: bool = False
         self._stop_event: threading.Event = threading.Event()
         self._start_time: float = 0.0
         self._total_analyzed: int = 0
         self._total_attacks: int = 0
+        self._total_regex_hits: int = 0  # 正则引擎命中计数
 
     # ==================================================================
     # 数据库连接
@@ -346,14 +355,38 @@ class PipelineService:
     # ==================================================================
 
     def _load_model(self) -> bool:
-        """加载 XGBoost 检测模型。"""
+        """加载 XGBoost 检测模型 + 正则检测引擎。"""
         try:
             self._detector = Detector()
             self._logger.info("AI 检测模型加载成功")
-            return True
         except Exception as e:
             self._logger.error("AI 模型加载失败: %s", e)
             return False
+
+        # 初始化正则检测引擎
+        if self._enable_regex and self._regex_detector is None:
+            try:
+                from src.ai_engine.regex_detector import create_detector
+                self._regex_detector = create_detector(
+                    signatures_path=REGEX_DETECTOR_CONFIG.get("signatures_path")
+                )
+                if self._regex_detector.rule_count > 0:
+                    self._logger.info(
+                        "正则检测引擎已就绪，加载了 %d 条特征规则",
+                        self._regex_detector.rule_count,
+                    )
+                    print(f"         [INFO] 正则检测引擎已就绪，加载了 {self._regex_detector.rule_count} 条特征规则")
+                else:
+                    self._logger.warning("正则检测引擎未加载到任何规则")
+            except ImportError:
+                self._logger.warning("正则检测引擎模块不可用，仅使用 XGBoost")
+                self._enable_regex = False
+            except Exception as e:
+                self._logger.warning("正则检测引擎初始化失败: %s，降级为仅 XGBoost", e)
+                self._enable_regex = False
+                self._regex_detector = None
+
+        return True
 
     # ==================================================================
     # analyze_once — 单次检测
@@ -424,7 +457,7 @@ class PipelineService:
                     )
                     continue
 
-                # AI 预测（含置信度）— 使用 predict_with_details 获取更多信息
+                # ── (A) XGBoost 统计特征推理 ──────────────────────
                 try:
                     attack_type, confidence, top3, is_low_conf = \
                         self._detector.predict_with_details(feature_vector)
@@ -442,22 +475,87 @@ class PipelineService:
                         [(t, f"{p:.4f}") for t, p in top3],
                     )
 
-                # 清洗标签
+                # 清洗 XGBoost 标签
                 if str(attack_type).upper() in ("BENIGN", "NORMAL"):
-                    is_attack = 0
-                    clean_type = "Normal"
+                    is_attack_ml = 0
+                    clean_type_ml = "Normal"
                 else:
-                    is_attack = 1
-                    clean_type = str(attack_type)
+                    is_attack_ml = 1
+                    clean_type_ml = str(attack_type)
+
+                # ── (B) 正则引擎载荷扫描 ──────────────────────────
+                regex_result = None
+                if self._enable_regex and self._regex_detector is not None:
+                    try:
+                        payload_data = {
+                            "uri": row.get("http_uri") or row.get("http_uri") or "",
+                            "body": "",
+                            "payload": row.get("raw_payload") or "",
+                            "method": row.get("http_method") or "",
+                            "user_agent": row.get("user_agent") or "",
+                            "host": row.get("http_host") or "",
+                        }
+                        regex_result = self._regex_detector.analyze_payload(
+                            payload_data
+                        )
+                    except Exception as e:
+                        self._logger.debug(
+                            "Flow ID=%d 正则扫描异常（已恢复）: %s", row_id, e
+                        )
+                        regex_result = None
+
+                # ── (C) 智能决策融合 ──────────────────────────────
+                # 默认使用 XGBoost 结果
+                is_attack = is_attack_ml
+                clean_type = clean_type_ml
+                fusion_source = "XGBoost"
+
+                if regex_result and regex_result.get("is_attack"):
+                    # 正则引擎命中 → 高优先级覆盖
+                    regex_type = regex_result.get("type", "Unknown")
+                    regex_severity = regex_result.get("severity", "MEDIUM")
+                    regex_matched = regex_result.get("matched", "")
+                    regex_rule = regex_result.get("rule_id", "")
+                    self._total_regex_hits += 1
+
+                    if not is_attack_ml:
+                        # XGBoost 判 Normal 但正则命中 → 覆盖为攻击
+                        is_attack = 1
+                        clean_type = regex_type
+                        fusion_source = "Regex(override)"
+                        self._logger.info(
+                            "Flow ID=%d 正则引擎覆盖 XGBoost: %s (规则: %s)",
+                            row_id, regex_type, regex_rule,
+                        )
+                    else:
+                        # 两者都判攻击 → 取正则类型（更精确）
+                        clean_type = regex_type
+                        fusion_source = "XGBoost+Regex"
+
+                # ── 生成融合判定理由 ─────────────────────────────
+                ai_reason = generate_ai_reason(feature_vector, clean_type_ml)
+                if regex_result and regex_result.get("is_attack"):
+                    regex_desc = (
+                        f"特征库命中: {regex_result.get('type', '')}"
+                        f"({regex_result.get('rule_name', '')})"
+                        f" | 匹配: {regex_result.get('matched', '')[:80]}"
+                    )
+                    ai_reason = f"[{regex_desc}] | [AI预测: {ai_reason}]"
+                else:
+                    ai_reason = f"[AI预测: {ai_reason}]"
+
+                # ── 风险等级（融合后） ──────────────────────────
+                risk = calculate_risk(clean_type)
 
                 # 映射字段
                 timestamp = row.get("create_time") or datetime.datetime.now()
                 client_ip = row.get("target_ip") or "0.0.0.0"
-                risk = calculate_risk(clean_type)
-                ai_reason = generate_ai_reason(feature_vector, clean_type)
 
-                # 输出到控制台
+                # 输出到控制台（正则命中时特别标注）
                 self._print_flow_result(row_id, clean_type, confidence, risk)
+                if fusion_source.startswith("Regex"):
+                    print(f"         [REGEX HIT] {regex_result.get('rule_name', '')}: "
+                          f"matched='{regex_result.get('matched', '')[:60]}'")
 
                 insert_rows.append((
                     timestamp, client_ip, is_attack, clean_type, risk,
@@ -692,6 +790,8 @@ class PipelineService:
         print(f"  运行时长  : {hours:02d}:{minutes:02d}:{seconds:02d}")
         print(f"  累计分析  : {self._total_analyzed} 条")
         print(f"  检测攻击  : {self._total_attacks} 条")
+        if self._enable_regex and self._regex_detector is not None:
+            print(f"  正则命中  : {self._total_regex_hits} 条")
         print(f"  日志文件  : {LOG_FILE}")
         print(self.SEPARATOR)
 

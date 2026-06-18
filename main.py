@@ -138,10 +138,10 @@ _SERVICE_BANNER: str = """
 │      目标: {target:<45} │
 │      采集间隔: {monitor_interval}s   AI检测间隔: {pipeline_interval}s │
 │                                                                  │
-│  [2] Pipeline Service  —  XGBoost AI 检测引擎                    │
-│      模型: XGBoost (6 维流量特征)                                │
+│  [2] Pipeline Service  —  XGBoost + Regex 双引擎检测             │
+│      模型: XGBoost (15维特征) + 正则载荷匹配                      │
 │      数据源: flow_features (WHERE ai_processed=0)                 │
-│      输出: traffic_logs (威胁判定 + 置信度 + AI理由)              │
+│      输出: traffic_logs (威胁判定 + 置信度 + 双引擎融合理由)       │
 │                                                                  │
 │  数据库: {db_host}:{db_port}/{db_name}                             │
 │  日志目录: {log_dir}                                    │
@@ -175,6 +175,7 @@ class AIIDSMaster:
         enable_monitor: bool = True,
         enable_pipeline: bool = True,
         no_capture: bool = False,
+        enable_regex: bool = True,
     ) -> None:
         # 配置
         self._target: str = target
@@ -183,6 +184,7 @@ class AIIDSMaster:
         self._enable_monitor: bool = enable_monitor
         self._enable_pipeline: bool = enable_pipeline
         self._no_capture: bool = no_capture
+        self._enable_regex: bool = enable_regex
 
         # 日志
         self._logger: logging.Logger = _setup_main_logger()
@@ -190,6 +192,7 @@ class AIIDSMaster:
         # 子系统实例（延迟初始化）
         self._monitor: Optional[TrafficMonitor] = None
         self._pipeline: Optional[PipelineService] = None
+        self._regex_detector: Any = None  # 正则检测引擎
 
         # 线程管理
         self._monitor_thread: Optional[threading.Thread] = None
@@ -298,12 +301,35 @@ class AIIDSMaster:
                 print("         流量采集功能已禁用。")
                 self._enable_monitor = False
 
+        # ── RegexDetector ──────────────────────────────────────
+        if self._enable_regex:
+            try:
+                from src.ai_engine.regex_detector import create_detector
+                from config import REGEX_DETECTOR_CONFIG
+                self._regex_detector = create_detector(
+                    signatures_path=REGEX_DETECTOR_CONFIG.get("signatures_path")
+                )
+                if self._regex_detector.rule_count > 0:
+                    self._logger.info(
+                        "正则检测引擎已就绪，加载了 %d 条特征规则",
+                        self._regex_detector.rule_count,
+                    )
+                    print(f"         [INFO] 正则检测引擎已就绪，加载了 {self._regex_detector.rule_count} 条特征规则")
+            except ImportError:
+                self._logger.warning("正则检测引擎模块不可用")
+                self._enable_regex = False
+            except Exception as e:
+                self._logger.warning("正则检测引擎初始化失败: %s", e)
+                self._enable_regex = False
+
         # ── PipelineService ─────────────────────────────────────
         if self._enable_pipeline:
             print("  [2/2] 初始化 PipelineService ...")
             try:
                 self._pipeline = PipelineService(
-                    poll_interval=self._pipeline_interval
+                    poll_interval=self._pipeline_interval,
+                    regex_detector=self._regex_detector,
+                    enable_regex=self._enable_regex,
                 )
                 # 检查数据库结构
                 if not self._pipeline.ensure_db_structure():
@@ -477,6 +503,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--skip-pipeline", action="store_true",
         help="跳过 AI 检测模块，仅运行流量采集",
     )
+    svc_group.add_argument(
+        "--disable-regex", action="store_true",
+        help="禁用正则载荷检测引擎（仅使用 XGBoost）",
+    )
 
     # ── 调度参数 ────────────────────────────────────────────────
     sched_group = parser.add_argument_group("调度参数")
@@ -518,7 +548,25 @@ def main() -> None:
     # ── 单次模式：快速路径 ───────────────────────────────────────
     if args.once or (args.all and not enable_monitor):
         # 不启动 TrafficMonitor，仅执行一次 AI 检测
-        pipeline = PipelineService(poll_interval=args.pipeline_interval)
+        # 初始化正则引擎
+        regex_detector = None
+        if not getattr(args, 'disable_regex', False):
+            try:
+                from src.ai_engine.regex_detector import create_detector
+                from config import REGEX_DETECTOR_CONFIG
+                regex_detector = create_detector(
+                    signatures_path=REGEX_DETECTOR_CONFIG.get("signatures_path")
+                )
+                if regex_detector.rule_count > 0:
+                    print(f"[INFO] 正则检测引擎已就绪，加载了 {regex_detector.rule_count} 条特征规则")
+            except Exception as e:
+                print(f"[WARN] 正则引擎不可用: {e}")
+
+        pipeline = PipelineService(
+            poll_interval=args.pipeline_interval,
+            regex_detector=regex_detector,
+            enable_regex=not getattr(args, 'disable_regex', False),
+        )
 
         if not pipeline.ensure_db_structure():
             print("[FATAL] 数据库初始化失败，退出")
@@ -570,11 +618,15 @@ def main() -> None:
         enable_monitor=enable_monitor,
         enable_pipeline=enable_pipeline,
         no_capture=args.no_capture,
+        enable_regex=not args.disable_regex,
     )
 
     # 如有 --all 参数，先重置再启动持续模式
     if args.all:
-        pipeline = PipelineService(poll_interval=args.pipeline_interval)
+        pipeline = PipelineService(
+            poll_interval=args.pipeline_interval,
+            enable_regex=False,  # 重置阶段不需要检测
+        )
         if pipeline.ensure_db_structure():
             conn = pipeline._get_connection()
             if conn:

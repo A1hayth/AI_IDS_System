@@ -226,6 +226,16 @@ class DatabaseManager:
                                             COMMENT 'FIN标志计数',
             RST_Flag_Count          INT     NOT NULL DEFAULT 0
                                             COMMENT 'RST标志计数',
+            raw_payload             TEXT    NULL
+                                            COMMENT '原始HTTP载荷(截断至2000字符，供正则引擎)',
+            http_uri                VARCHAR(2048) NULL
+                                            COMMENT 'HTTP请求URI',
+            http_method             VARCHAR(10) NULL
+                                            COMMENT 'HTTP方法(GET/POST/...)',
+            http_host               VARCHAR(255) NULL
+                                            COMMENT 'HTTP Host头',
+            user_agent              VARCHAR(500) NULL
+                                            COMMENT 'User-Agent头',
             INDEX idx_create_time (create_time),
             INDEX idx_target_host (target_host),
             INDEX idx_target_ip (target_ip),
@@ -234,7 +244,7 @@ class DatabaseManager:
         COMMENT='AI-IDS 流特征表 (v3) — 供 AI 模块与告警平台读取';
     """
 
-    # v3 新增列定义（列名, 类型, 默认值, 注释）
+    # v3/v4 新增列定义（列名, 类型, 默认值, 注释）
     MIGRATE_COLUMNS: List[Tuple[str, str, str, str]] = [
         ("Fwd_Packet_Length_Mean", "DOUBLE", "0.0", "前向平均包长(字节)"),
         ("Bwd_Packet_Length_Mean", "DOUBLE", "0.0", "后向平均包长(字节)"),
@@ -245,9 +255,15 @@ class DatabaseManager:
         ("SYN_Flag_Count", "INT", "0", "SYN标志计数"),
         ("FIN_Flag_Count", "INT", "0", "FIN标志计数"),
         ("RST_Flag_Count", "INT", "0", "RST标志计数"),
+        # v4: 载荷列（供正则引擎扫描）— 可为 NULL
+        ("raw_payload", "TEXT", "NULL", "原始HTTP载荷"),
+        ("http_uri", "VARCHAR(2048)", "NULL", "HTTP请求URI"),
+        ("http_method", "VARCHAR(10)", "NULL", "HTTP方法"),
+        ("http_host", "VARCHAR(255)", "NULL", "HTTP Host头"),
+        ("user_agent", "VARCHAR(500)", "NULL", "User-Agent头"),
     ]
 
-    # 批量插入 SQL (v3: 15 特征列)
+    # 批量插入 SQL (v4: 15 特征列 + 5 载荷列)
     INSERT_SQL: str = """
         INSERT INTO flow_features
             (target_host, target_ip, Protocol, Flow_Duration,
@@ -256,10 +272,12 @@ class DatabaseManager:
              Fwd_Packet_Length_Mean, Bwd_Packet_Length_Mean,
              Flow_Bytes_Per_Sec, Flow_Packets_Per_Sec,
              Fwd_IAT_Mean, Bwd_IAT_Mean,
-             SYN_Flag_Count, FIN_Flag_Count, RST_Flag_Count)
+             SYN_Flag_Count, FIN_Flag_Count, RST_Flag_Count,
+             raw_payload, http_uri, http_method, http_host, user_agent)
         VALUES
             (%s, %s, %s, %s, %s, %s, %s, %s,
-             %s, %s, %s, %s, %s, %s, %s, %s, %s);
+             %s, %s, %s, %s, %s, %s, %s, %s, %s,
+             %s, %s, %s, %s, %s);
     """
 
     def __init__(self, config: DatabaseConfig) -> None:
@@ -379,11 +397,13 @@ class DatabaseManager:
                     if col_name not in existing_cols:
                         try:
                             cur3 = self._conn.cursor()
-                            cur3.execute(
-                                f"ALTER TABLE flow_features "
-                                f"ADD COLUMN {col_name} {col_type} NOT NULL DEFAULT {col_default} "
-                                f"COMMENT '{col_comment}'"
-                            )
+                            if col_default == "NULL":
+                                sql = f"ALTER TABLE flow_features ADD COLUMN {col_name} {col_type} NULL COMMENT '{col_comment}'"
+                            else:
+                                sql = (f"ALTER TABLE flow_features "
+                                       f"ADD COLUMN {col_name} {col_type} NOT NULL DEFAULT {col_default} "
+                                       f"COMMENT '{col_comment}'")
+                            cur3.execute(sql)
                             cur3.close()
                             self._logger.info("已添加列: flow_features.%s", col_name)
                         except Exception as e:
@@ -432,6 +452,11 @@ class DatabaseManager:
                     flow.SYN_Flag_Count,
                     flow.FIN_Flag_Count,
                     flow.RST_Flag_Count,
+                    flow.raw_payload or None,
+                    flow.http_uri or None,
+                    flow.http_method or None,
+                    flow.http_host or None,
+                    flow.user_agent or None,
                 ))
                 cursor.close()
                 return True
@@ -484,6 +509,11 @@ class DatabaseManager:
                 f.SYN_Flag_Count,
                 f.FIN_Flag_Count,
                 f.RST_Flag_Count,
+                f.raw_payload or None,
+                f.http_uri or None,
+                f.http_method or None,
+                f.http_host or None,
+                f.user_agent or None,
             )
             for f in flows
         ]

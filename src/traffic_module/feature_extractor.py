@@ -198,14 +198,43 @@ class _FlowRecord:
     fin_count: int = 0                 # FIN 标志计数
     rst_count: int = 0                 # RST 标志计数
 
+    # --- 正则载荷数据（保存第一个 HTTP 载荷用于后续扫描）---
+    _raw_payload: str = ""
+    _http_uri: str = ""
+    _http_method: str = ""
+    _http_host: str = ""
+    _user_agent: str = ""
+
     # --- 状态 ---
     is_closed: bool = False
     close_reason: str = ""
     flow_id: str = ""
 
     def update(self, parsed: Any, pkt_ts: float, pkt_len: float) -> None:
-        """根据一个 ParsedPacket 更新统计量（含 v3 扩展）。"""
+        """根据一个 ParsedPacket 更新统计量（含 v3 扩展 + 载荷采集）。"""
         self.last_seen = pkt_ts
+
+        # ── v4: 采集第一个有效的 HTTP 载荷供正则引擎扫描 ──
+        if not self._raw_payload:
+            pld = getattr(parsed, "payload", None)
+            if pld and isinstance(pld, str) and len(pld) > 10:
+                self._raw_payload = pld[:2000]  # 截断至 2000 字符
+        if not self._http_uri:
+            uri = getattr(parsed, "http_uri", None)
+            if uri:
+                self._http_uri = str(uri)[:2000]
+        if not self._http_method:
+            mth = getattr(parsed, "http_method", None)
+            if mth:
+                self._http_method = str(mth)[:10]
+        if not self._http_host:
+            hst = getattr(parsed, "http_host", None)
+            if hst:
+                self._http_host = str(hst)[:255]
+        if not self._user_agent:
+            ua = getattr(parsed, "user_agent", None)
+            if ua:
+                self._user_agent = str(ua)[:500]
 
         forward = is_forward(
             parsed.src_ip or "",
@@ -288,6 +317,12 @@ class _FlowRecord:
             flow_id=self.flow_id,
             start_time=datetime.fromtimestamp(self.start_time, tz=timezone.utc).isoformat(),
             last_seen=datetime.fromtimestamp(self.last_seen, tz=timezone.utc).isoformat(),
+            # v4: 载荷数据
+            raw_payload=self._raw_payload,
+            http_uri=self._http_uri,
+            http_method=self._http_method,
+            http_host=self._http_host,
+            user_agent=self._user_agent,
         )
 
 
@@ -362,6 +397,13 @@ class FlowFeature:
     FIN_Flag_Count: int = 0
     RST_Flag_Count: int = 0
 
+    # --- v4: 载荷数据（供正则引擎扫描）---
+    raw_payload: str = ""
+    http_uri: str = ""
+    http_method: str = ""
+    http_host: str = ""
+    user_agent: str = ""
+
     # --- 元信息（不进入模型）---
     flow_id: str = ""
     start_time: str = ""
@@ -408,6 +450,11 @@ class FlowFeature:
             "flow_id": self.flow_id,
             "start_time": self.start_time,
             "last_seen": self.last_seen,
+            "raw_payload": self.raw_payload,
+            "http_uri": self.http_uri,
+            "http_method": self.http_method,
+            "http_host": self.http_host,
+            "user_agent": self.user_agent,
         }
 
     def to_json(self, indent: int = 2) -> str:
