@@ -2,16 +2,605 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>AI-IDS Test Site — 静态首页</title>
-    <link rel="stylesheet" href="/style.css">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>AI-IDS Test Site — 靶机 (Dark)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-1: #060a0e;
+            --bg-2: #0a1016;
+            --bg-3: #0d141b;
+            --panel: #0c1218;
+            --accent: #00ff88;
+            --accent-2: #33ffbb;
+            --accent-dim: rgba(0, 255, 136, 0.15);
+            --accent-glow: rgba(0, 255, 136, 0.25);
+            --muted: #6b7a85;
+            --text: #c8d6e0;
+            --text-bright: #e8f0f5;
+            --danger: #ff4757;
+            --warning: #ffa502;
+            --info: #2ed573;
+            --glass: rgba(255, 255, 255, 0.02);
+            --glass-border: rgba(255, 255, 255, 0.04);
+            --glow: 0 0 40px rgba(0, 255, 136, 0.08);
+            --glow-strong: 0 0 60px rgba(0, 255, 136, 0.15);
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+            --mono: "JetBrains Mono", "Fira Mono", "Consolas", monospace;
+            --sans: "Noto Sans SC", -apple-system, "Segoe UI", sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+
+        body {
+            margin: 0;
+            font-family: var(--sans);
+            background: 
+                radial-gradient(ellipse 800px 500px at 15% 20%, rgba(0, 255, 136, 0.03), transparent),
+                radial-gradient(ellipse 600px 400px at 85% 80%, rgba(0, 200, 255, 0.02), transparent),
+                radial-gradient(ellipse 500px 300px at 50% 50%, rgba(0, 255, 136, 0.015), transparent),
+                linear-gradient(180deg, var(--bg-1), var(--bg-2));
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* 扫描线效果 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 255, 136, 0.015) 2px,
+                rgba(0, 255, 136, 0.015) 4px
+            );
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0.6;
+        }
+
+        /* 角落装饰 */
+        .corner-deco {
+            position: fixed;
+            width: 200px; height: 200px;
+            pointer-events: none;
+            z-index: 999;
+        }
+        .corner-deco::before, .corner-deco::after {
+            content: '';
+            position: absolute;
+            background: var(--accent);
+            opacity: 0.2;
+        }
+        .corner-deco.tl { top: 0; left: 0; }
+        .corner-deco.tl::before { width: 60px; height: 1px; top: 20px; left: 20px; }
+        .corner-deco.tl::after { width: 1px; height: 60px; top: 20px; left: 20px; }
+        .corner-deco.tr { top: 0; right: 0; transform: rotate(90deg); }
+        .corner-deco.tr::before { width: 60px; height: 1px; top: 20px; left: 20px; }
+        .corner-deco.tr::after { width: 1px; height: 60px; top: 20px; left: 20px; }
+        .corner-deco.bl { bottom: 0; left: 0; transform: rotate(-90deg); }
+        .corner-deco.bl::before { width: 60px; height: 1px; top: 20px; left: 20px; }
+        .corner-deco.bl::after { width: 1px; height: 60px; top: 20px; left: 20px; }
+        .corner-deco.br { bottom: 0; right: 0; transform: rotate(180deg); }
+        .corner-deco.br::before { width: 60px; height: 1px; top: 20px; left: 20px; }
+        .corner-deco.br::after { width: 1px; height: 60px; top: 20px; left: 20px; }
+
+        /* 布局 */
+        .wrap {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            padding: 28px;
+            min-height: 100vh;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ===== Header ===== */
+        .site-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            backdrop-filter: blur(12px);
+            position: relative;
+            overflow: hidden;
+        }
+        .site-header::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+        }
+        .site-header::after {
+            content: '';
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+        }
+
+        .brand { display: flex; flex-direction: column; gap: 4px; }
+        .logo {
+            font-family: var(--mono);
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .logo::before {
+            content: '>';
+            color: var(--accent);
+            animation: blink 1.5s infinite;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .subtitle {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 1px;
+        }
+
+        .nav { display: flex; gap: 6px; }
+        .nav-btn {
+            font-family: var(--mono);
+            color: var(--muted);
+            text-decoration: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            border: 1px solid transparent;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        .nav-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.05), transparent);
+            transition: left 0.5s;
+        }
+        .nav-btn:hover {
+            color: var(--accent-2);
+            border-color: var(--accent-dim);
+            background: rgba(0, 255, 136, 0.03);
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.08);
+        }
+        .nav-btn:hover::before { left: 100%; }
+
+        /* ===== Main ===== */
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 24px;
+            align-items: start;
+            flex: 1;
+        }
+
+        .panel {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.005));
+            border-radius: 14px;
+            padding: 24px;
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.1), transparent);
+        }
+        .panel:hover {
+            border-color: rgba(0, 255, 136, 0.06);
+            box-shadow: var(--shadow), 0 0 40px rgba(0, 255, 136, 0.03);
+        }
+
+        /* ===== Terminal ===== */
+        .terminal {
+            position: relative;
+            overflow: hidden;
+            border-left: 3px solid rgba(0, 255, 136, 0.15);
+        }
+        .terminal::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: radial-gradient(ellipse 600px 300px at 50% 0%, rgba(0, 255, 136, 0.02), transparent);
+            pointer-events: none;
+        }
+
+        .term-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            position: relative;
+        }
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            position: relative;
+        }
+        .dot::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%; height: 100%;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
+            100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
+        }
+        .dot.red { background: var(--danger); }
+        .dot.red::after { background: var(--danger); }
+        .dot.yellow { background: var(--warning); }
+        .dot.yellow::after { background: var(--warning); }
+        .dot.green { background: var(--info); }
+        .dot.green::after { background: var(--info); }
+        .term-title {
+            margin-left: auto;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 1px;
+        }
+
+        /* ===== Content ===== */
+        .term-body { padding-top: 20px; }
+        .term-body h1 {
+            font-family: var(--mono);
+            margin: 0 0 12px;
+            color: var(--accent-2);
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-shadow: 0 0 30px rgba(0, 255, 136, 0.15);
+        }
+        .term-body p {
+            color: var(--muted);
+            line-height: 1.7;
+            margin: 0 0 18px;
+            font-size: 14px;
+        }
+        .term-body p strong {
+            color: var(--text-bright);
+            font-weight: 600;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            border-radius: 10px;
+            background: linear-gradient(180deg, rgba(0, 255, 136, 0.1), rgba(0, 255, 136, 0.04));
+            color: var(--accent-2);
+            text-decoration: none;
+            font-family: var(--mono);
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 20px rgba(0, 255, 136, 0.06);
+            border: 1px solid rgba(0, 255, 136, 0.15);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.1), transparent);
+            transition: left 0.5s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 255, 136, 0.15);
+            border-color: rgba(0, 255, 136, 0.3);
+            color: #fff;
+        }
+        .btn:hover::before { left: 100%; }
+        .btn::after {
+            content: '→';
+            font-size: 11px;
+            opacity: 0.7;
+            transition: transform 0.3s;
+        }
+        .btn:hover::after { transform: translateX(3px); }
+
+        .info-list {
+            margin: 20px 0 0;
+            padding-left: 0;
+            list-style: none;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 13px;
+        }
+        .info-list li {
+            margin: 10px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+        .info-list li::before {
+            content: '$';
+            position: absolute;
+            left: 0;
+            color: var(--accent);
+            opacity: 0.5;
+        }
+        .info-list li strong {
+            color: var(--text-bright);
+        }
+
+        /* ===== Side Panel ===== */
+        .side h2 {
+            font-family: var(--mono);
+            color: var(--accent-2);
+            margin: 0 0 8px;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .muted {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .side-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        .ghost {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            color: var(--accent-2);
+            text-decoration: none;
+            font-family: var(--mono);
+            font-size: 13px;
+            border: 1px dashed rgba(0, 255, 136, 0.12);
+            background: transparent;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        .ghost::before {
+            content: '>';
+            color: var(--accent);
+            opacity: 0.5;
+            font-size: 11px;
+        }
+        .ghost:hover {
+            background: rgba(0, 255, 136, 0.04);
+            border-color: rgba(0, 255, 136, 0.25);
+            color: #fff;
+            transform: translateX(4px);
+        }
+
+        /* 状态指示器 */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+            padding: 10px 14px;
+            background: rgba(0, 255, 136, 0.03);
+            border-radius: 8px;
+            border: 1px solid rgba(0, 255, 136, 0.06);
+        }
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent-glow);
+            animation: statusPulse 2s infinite;
+        }
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .status-text {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+        }
+        .status-text span { color: var(--accent); }
+
+        /* ===== Footer ===== */
+        .site-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            background: var(--glass);
+            border-radius: 12px;
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            position: relative;
+        }
+        .site-footer::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+        }
+        .foot-right {
+            color: var(--accent);
+            opacity: 0.6;
+        }
+
+        /* ===== 系统信息面板 ===== */
+        .sys-info {
+            margin-top: 16px;
+            padding: 14px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+        }
+        .sys-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        }
+        .sys-info-row:last-child { border-bottom: none; }
+        .sys-label { color: var(--muted); }
+        .sys-value { color: var(--accent-2); }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 900px) {
+            .main { grid-template-columns: 1fr; gap: 16px; }
+            .site-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+            .nav { flex-wrap: wrap; }
+            .wrap { padding: 16px; gap: 16px; }
+            .actions { flex-direction: column; }
+            .btn { width: 100%; justify-content: center; }
+        }
+
+        @media (max-width: 600px) {
+            .logo { font-size: 18px; }
+            .term-body h1 { font-size: 20px; }
+            .site-footer { flex-direction: column; gap: 8px; text-align: center; }
+        }
+    </style>
+<base target="_blank">
 </head>
 <body>
-    <h1>AI-IDS Test Site (Static)</h1>
-    <p>此页面通过 /index.html 直接访问。</p>
-    <ul>
-        <li><a href="/">PHP 首页</a></li>
-        <li><a href="/products.php">产品页</a></li>
-        <li><a href="/items.php?id=1">商品详情</a></li>
-    </ul>
+    <!-- 角落装饰 -->
+    <div class="corner-deco tl"></div>
+    <div class="corner-deco tr"></div>
+    <div class="corner-deco bl"></div>
+    <div class="corner-deco br"></div>
+
+    <div class="wrap">
+        <header class="site-header">
+            <div class="brand">
+                <div class="logo">AI‑IDS</div>
+                <div class="subtitle">靶机演示 • 黑暗终端风格</div>
+            </div>
+            <nav class="nav">
+                <a class="nav-btn" href="/">首页</a>
+                <a class="nav-btn" href="/products.php">产品</a>
+                <a class="nav-btn" href="/items.php?id=1">商品详情</a>
+            </nav>
+        </header>
+
+        <main class="main">
+            <section class="panel terminal">
+                <div class="term-header">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                    <div class="term-title">AI-IDS Test Site — 静态首页</div>
+                </div>
+                <div class="term-body">
+                    <h1>靶机演示 (Dark Terminal)</h1>
+                    <p>此页面通过 <strong>/index.html</strong> 直接访问。页面保留攻击面风格，供演示与检测使用。</p>
+
+                    <div class="actions">
+                        <a class="btn" href="/">PHP 首页</a>
+                        <a class="btn" href="/products.php">产品页</a>
+                        <a class="btn" href="/items.php?id=1">商品详情</a>
+                    </div>
+
+                    <ul class="info-list">
+                        <li><strong>环境：</strong> 靶机静态演示</li>
+                        <li><strong>注意：</strong> 请勿在生产环境开启此页面的外部访问</li>
+                    </ul>
+                </div>
+            </section>
+
+            <aside class="panel side">
+                <h2>快速操作</h2>
+                <p class="muted">用于演示的常用入口与系统状态</p>
+                <div class="side-actions">
+                    <a class="ghost" href="/vulnerable_server.py">启动靶机服务</a>
+                    <a class="ghost" href="/web/init_db.py">初始化数据库</a>
+                </div>
+
+                <div class="status-bar">
+                    <div class="status-dot"></div>
+                    <div class="status-text">系统状态: <span>运行中</span></div>
+                </div>
+
+                <div class="sys-info">
+                    <div class="sys-info-row">
+                        <span class="sys-label">OS</span>
+                        <span class="sys-value">Linux x86_64</span>
+                    </div>
+                    <div class="sys-info-row">
+                        <span class="sys-label">Web</span>
+                        <span class="sys-value">Apache/2.4</span>
+                    </div>
+                    <div class="sys-info-row">
+                        <span class="sys-label">PHP</span>
+                        <span class="sys-value">8.1.0</span>
+                    </div>
+                    <div class="sys-info-row">
+                        <span class="sys-label">DB</span>
+                        <span class="sys-value">MySQL 8.0</span>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <footer class="site-footer">
+            <span>© AI-IDS • 演示环境</span>
+            <span class="foot-right">暗色靶机风格 v2.0</span>
+        </footer>
+    </div>
 </body>
 </html>

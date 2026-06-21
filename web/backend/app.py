@@ -20,7 +20,7 @@ if sys.platform == 'win32':
 # 确保 backend 目录在 Python 路径中，方便导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 
@@ -32,6 +32,13 @@ from routes.firewall_bp import firewall_bp
 
 
 def create_app():
+    # ── 静态文件目录 ────────────────────────────────────
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # 管理后台前端页面 (admin.html, login.html, register.html, user.html)
+    front_dir = os.path.join(base_dir, '..', 'front')
+    # 靶机测试网站 (index.html, style.css, script.js 等)
+    target_dir = os.path.join(base_dir, '..', 'test_website')
+
     app = Flask(__name__)
 
     # ── CORS 跨域配置 ──────────────────────────────────
@@ -49,14 +56,41 @@ def create_app():
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(firewall_bp)
 
-    # ── 根路径 ─────────────────────────────────────────
+    # ── 前端页面路由 ───────────────────────────────────
     @app.route('/')
     def index():
+        """首页 —— 靶机测试网站"""
+        return send_from_directory(target_dir, 'index.html')
+
+    @app.route('/api')
+    def api_info():
         return {
             'service': 'AI 网络入侵检测与安全预警系统',
             'version': '1.0.0',
             'docs': '请查看项目 README 获取接口文档',
         }
+
+    # ── 靶机静态文件（CSS/JS/图片等） ──────────────────
+    @app.route('/<path:filename>')
+    def serve_target_files(filename):
+        """优先从管理前端找，找不到再从靶机目录找"""
+        # 跳过 API 路由
+        if filename.startswith('api/'):
+            from flask import abort
+            abort(404)
+
+        # 先尝试 front 目录
+        front_path = os.path.join(front_dir, filename)
+        if os.path.isfile(front_path):
+            return send_from_directory(front_dir, filename)
+
+        # 再尝试靶机 test_website 目录
+        target_path = os.path.join(target_dir, filename)
+        if os.path.isfile(target_path):
+            return send_from_directory(target_dir, filename)
+
+        from flask import abort
+        abort(404)
 
     # ── 全局错误处理 ───────────────────────────────────
     @app.errorhandler(404)
@@ -78,12 +112,19 @@ if __name__ == '__main__':
     app = create_app()
 
     print('=' * 60)
-    print('  🛡️  AI 网络入侵检测与安全预警系统 - 后端服务')
+    print('  🛡️  AI 网络入侵检测与安全预警系统')
     print(f'  地址: http://localhost:{FLASK_PORT}')
-    print('  接口前缀: /api/v1/')
     print('=' * 60)
     print()
-    print('  已注册接口:')
+    print('  前端页面:')
+    print('    GET  /                          靶机测试网站首页')
+    print('    GET  /login.html                管理后台登录页')
+    print('    GET  /admin.html                管理员控制台')
+    print('    GET  /register.html             注册页')
+    print('    GET  /user.html                 用户仪表板')
+    print('    GET  /index.html                靶机静态首页')
+    print()
+    print('  API 接口 (前缀 /api/v1/):')
     print('    POST /api/v1/auth/login         用户登录')
     print('    POST /api/v1/auth/register      用户注册')
     print('    POST /api/v1/traffic/save       AI 写入检测日志')

@@ -33,7 +33,6 @@ def overview():
                                           THEN 1 ELSE 0 END), 0)                  AS high_risk_attacks,
                         COUNT(DISTINCT CASE WHEN is_attack = 1 THEN client_ip END) AS unique_attack_ips
                     FROM traffic_logs
-                    WHERE DATE(timestamp) = CURDATE()
                 """
                 cur.execute(sql)
                 row = cur.fetchone()
@@ -63,15 +62,14 @@ def trend():
                 sql = """
                     SELECT
                         CONCAT(
-                            DATE_FORMAT(timestamp, '%%H:'),
+                            DATE_FORMAT(timestamp, '%H:'),
                             LPAD(FLOOR(MINUTE(timestamp) / 5) * 5, 2, '0')
                         )                          AS hour,
                         COUNT(*)                    AS traffic_count,
                         COALESCE(SUM(is_attack), 0) AS attack_count
                     FROM traffic_logs
-                    WHERE DATE(timestamp) = CURDATE()
                     GROUP BY CONCAT(
-                            DATE_FORMAT(timestamp, '%%H:'),
+                            DATE_FORMAT(timestamp, '%H:'),
                             LPAD(FLOOR(MINUTE(timestamp) / 5) * 5, 2, '0')
                         )
                     ORDER BY hour
@@ -110,7 +108,6 @@ def attack_types():
                         COUNT(*)    AS value
                     FROM traffic_logs
                     WHERE is_attack = 1
-                      AND DATE(timestamp) = CURDATE()
                     GROUP BY attack_type
                     ORDER BY value DESC
                 """
