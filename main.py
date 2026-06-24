@@ -23,7 +23,7 @@ AI-IDS 一体化启动入口 —— 一键启动流量监控 + AI 检测
 
 用法:
     python main.py                                          # 启动全部服务
-    python main.py --target www.baidu.com                   # 指定监控目标
+    python main.py --target www.example.com                   # 指定监控目标
     python main.py --target 192.168.1.105                   # IP 目标
     python main.py --no-capture                             # 仅 AI 检测（跳过抓包）
     python main.py --skip-pipeline                          # 仅流量采集（跳过 AI）
