@@ -854,6 +854,9 @@ class TrafficMonitor:
                 # ---- 步骤 B: 处理新数据包 ----
                 self._process_new_packets()
 
+                # ---- 步骤 B2: 始终回收超时 Flow（即使无新包也必须执行） ----
+                self._cleanup_expired()
+
                 # ---- 步骤 C: 定时写入数据库 ----
                 now = time.time()
                 if now - self._last_write_time >= self._config.write_interval:
@@ -873,6 +876,15 @@ class TrafficMonitor:
                 self._stop_event.wait(sleep_time)
 
     # ---- 步骤 B: 处理新数据包 -----------------------------------------------
+
+    def _cleanup_expired(self) -> None:
+        """强制回收超时 Flow（独立方法，不受 _process_new_packets 早期 return 影响）。"""
+        try:
+            expired = self._flow_manager.cleanup_expired_flows()
+            if expired:
+                self._logger.info("超时回收 Flow: %d 个", len(expired))
+        except Exception:
+            self._logger.warning("超时回收异常", exc_info=True)
 
     def _process_new_packets(self) -> None:
         """从 raw cache 中获取新数据包，解析并送入 FlowManager。
@@ -954,10 +966,16 @@ class TrafficMonitor:
     def _write_cycle(self) -> None:
         """执行一次完整的数据库写入周期。
 
-        流程: 获取已完成 Flow → 过滤已写入 → 批量 INSERT → 标记已写入
+        流程: 回收超时 → 获取已完成 Flow → 过滤已写入 → 批量 INSERT → 标记已写入
         """
         now = time.time()
         self._last_write_time = now
+
+        # 0. 先强制回收一次超时 Flow（兜底保险，保证 write cycle 前一定触发）
+        try:
+            self._flow_manager.cleanup_expired_flows()
+        except Exception:
+            pass
 
         # 1. 获取已完成 Flow
         try:

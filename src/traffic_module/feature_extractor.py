@@ -544,7 +544,7 @@ class FlowManager:
             # TCP FIN / RST 检测
             tcp_flags = getattr(parsed, "tcp_flags", None) or ""
             if proto_num == PROTO_TCP and tcp_flags:
-                if "FIN" in tcp_flags and "ACK" not in tcp_flags:
+                if "FIN" in tcp_flags:
                     record.is_closed = True
                     record.close_reason = "fin"
                     self._total_closed += 1
