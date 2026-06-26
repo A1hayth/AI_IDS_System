@@ -59,3 +59,53 @@ def ban():
         return internal_error(f'数据库异常: {str(e)}')
     except Exception as e:
         return internal_error(f'服务器异常: {str(e)}')
+
+
+@firewall_bp.route('/banned', methods=['GET'])
+def list_banned():
+    """获取当前封禁IP列表"""
+    try:
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, ip_address, ban_time, operator
+                    FROM banned_ips
+                    ORDER BY ban_time DESC
+                """)
+                rows = cur.fetchall()
+            return success(rows)
+        finally:
+            conn.close()
+    except pymysql.Error as e:
+        return internal_error(f'数据库异常: {str(e)}')
+    except Exception as e:
+        return internal_error(f'服务器异常: {str(e)}')
+
+
+@firewall_bp.route('/unban', methods=['POST'])
+def unban():
+    """解除IP封禁"""
+    try:
+        body = request.get_json(silent=True)
+        if not body:
+            return bad_request('请提供 JSON 格式的请求体')
+
+        ip = (body.get('ip') or body.get('ip_address') or '').strip()
+        if not ip:
+            return bad_request('ip 不能为空')
+
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM banned_ips WHERE ip_address = %s", (ip,))
+                if cur.rowcount == 0:
+                    return bad_request(f'IP {ip} 未被封禁')
+                conn.commit()
+            return success({'ip': ip}, f'IP {ip} 已解除封禁')
+        finally:
+            conn.close()
+    except pymysql.Error as e:
+        return internal_error(f'数据库异常: {str(e)}')
+    except Exception as e:
+        return internal_error(f'服务器异常: {str(e)}')

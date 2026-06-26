@@ -311,21 +311,22 @@ def inject_db(
         if missing:
             print(f"  [!] 未知攻击类型: {missing}")
 
-    if not selected:
+    if not selected and not include_benign:
         return 0
 
     rows = []
     now = datetime.datetime.now()
     attack_count = 0
 
-    for atype in selected:
-        info = ATTACK_FINGERPRINTS[atype]
-        tmpl = info["vectors"]
-        for i in range(count_per_type):
-            base = tmpl[i % len(tmpl)]
-            vec = _perturb(list(base))
-            rows.append(("攻击模拟", "10.0.0.99", now, vec, info["label"]))
-            attack_count += 1
+    if selected:
+        for atype in selected:
+            info = ATTACK_FINGERPRINTS[atype]
+            tmpl = info["vectors"]
+            for i in range(count_per_type):
+                base = tmpl[i % len(tmpl)]
+                vec = _perturb(list(base))
+                rows.append(("攻击模拟", "10.0.0.99", now, vec, info["label"]))
+                attack_count += 1
 
     if include_benign:
         for i in range(benign_count):

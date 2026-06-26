@@ -20,7 +20,7 @@ if sys.platform == 'win32':
 # 确保 backend 目录在 Python 路径中，方便导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, request, jsonify
 from flask_cors import CORS
 from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 
@@ -29,6 +29,46 @@ from routes.auth_bp import auth_bp
 from routes.traffic_bp import traffic_bp
 from routes.dashboard_bp import dashboard_bp
 from routes.firewall_bp import firewall_bp
+
+
+def _check_ip_banned():
+    """
+    封禁检查 —— 每次请求前从 banned_ips 表查询客户端IP，
+    命中则返回 403 阻止访问。
+    白名单: 本地地址 127.0.0.1 / localhost / ::1 不检查。
+    """
+    client_ip = (
+        request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+        or request.headers.get('X-Real-IP', '').strip()
+        or request.remote_addr
+        or ''
+    )
+    # 本地请求放行
+    if client_ip in ('127.0.0.1', 'localhost', '::1'):
+        return None
+
+    try:
+        import pymysql
+        conn = pymysql.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM banned_ips WHERE ip_address = %s", (client_ip,))
+                if cur.fetchone():
+                    return jsonify({
+                        'code': 403,
+                        'msg': f'您的IP({client_ip})已被系统封禁，禁止访问',
+                        'data': None,
+                    }), 403
+        finally:
+            conn.close()
+    except Exception:
+        pass  # DB不可用时降级放行，不影响正常服务
+
+    return None
+
+
+# 数据库配置（与 config.py 一致，供封禁检查使用）
+from config import DB_CONFIG
 
 
 def create_app():
@@ -49,6 +89,13 @@ def create_app():
             "allow_headers": ["Content-Type", "Authorization"],
         }
     })
+
+    # ── IP 封禁拦截（每次请求前自动检查 banned_ips 表）────
+    @app.before_request
+    def ban_check():
+        block = _check_ip_banned()
+        if block is not None:
+            return block
 
     # ── 注册蓝图 ───────────────────────────────────────
     app.register_blueprint(auth_bp)
